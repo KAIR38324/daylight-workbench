@@ -1,0 +1,42 @@
+name: Windows CPU desktop build
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install, test, and build one-folder EXE
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./build.ps1
+      - name: Upload Windows one-folder app
+        uses: actions/upload-artifact@v4
+        with:
+          name: DaylightWorkbench-Windows-x64
+          path: dist/DaylightWorkbench/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload GUI validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DaylightWorkbench-GUI-evidence
+          path: |
+            qa/evidence/*.json
+            qa/evidence/*.png
+          if-no-files-found: ignore
+          retention-days: 14
