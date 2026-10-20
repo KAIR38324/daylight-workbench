@@ -105,6 +105,6 @@ def test_filter_export_and_formula_header_escape(trained, tmp_path):
     path = tmp_path / 'export.csv'
     export_candidates(path, frame, trained, result)
     assert "'=FORMULA" in path.read_text(encoding='utf-8-sig').splitlines()[0]
-    provenance = json.loads(path.with_suffix('.csv.provenance.json').read_text())
+    provenance = json.loads(path.with_suffix('.csv.provenance.json').read_text(encoding='utf-8'))
     assert provenance['csv_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert provenance['dataset_sha256'] == trained.data.fingerprint
