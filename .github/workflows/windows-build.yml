@@ -6,13 +6,13 @@ permissions:
   contents: read
 jobs:
   build:
-    # The one-shot release commit only packages an already validated artifact.
+    # The one-shot release retry only packages an already validated artifact.
     if: >-
       github.event_name != 'push' ||
       github.repository != 'KAIR38324/daylight-workbench' ||
       github.ref != 'refs/heads/main' ||
-      github.event.before != '16fa88eeabae6024a4cc6639c1b49ca297d11c8b' ||
-      github.event.head_commit.message != 'Publish v0.3.0 prerelease'
+      github.event.before != '52a7d2e28b616bdcca13148decbf5dfb9c8268fa' ||
+      github.event.head_commit.message != 'Publish v0.3.0 prerelease retry'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -49,13 +49,13 @@ jobs:
           retention-days: 14
 
   release_v030:
-    # Runs once, only for the release commit immediately after the documented build.
+    # Runs once, only for the authorized retry after the first release API rejection.
     if: >-
       github.event_name == 'push' &&
       github.repository == 'KAIR38324/daylight-workbench' &&
       github.ref == 'refs/heads/main' &&
-      github.event.before == '16fa88eeabae6024a4cc6639c1b49ca297d11c8b' &&
-      github.event.head_commit.message == 'Publish v0.3.0 prerelease'
+      github.event.before == '52a7d2e28b616bdcca13148decbf5dfb9c8268fa' &&
+      github.event.head_commit.message == 'Publish v0.3.0 prerelease retry'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Verify release source and tested Windows artifact
         shell: bash
@@ -72,8 +72,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = '16fa88eeabae6024a4cc6639c1b49ca297d11c8b'
-          diff -u <(printf '%s\n' '.github/workflows/windows-build.yml' 'RELEASE_NOTES_v0.3.0.md') <(git diff --name-only HEAD^ HEAD | sort)
+          test "$(git rev-parse HEAD^)" = '52a7d2e28b616bdcca13148decbf5dfb9c8268fa'
+          test "$(git rev-parse HEAD^^)" = '16fa88eeabae6024a4cc6639c1b49ca297d11c8b'
+          diff -u <(printf '%s\n' '.github/workflows/windows-build.yml' 'RELEASE_NOTES_v0.3.0.md') <(git diff --name-only HEAD^^ HEAD | sort)
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" |
+            jq -e --arg sha "$GITHUB_SHA" '.object.sha == $sha' >/dev/null
           test "$(sha256sum 'docs/建筑采光多目标优化平台 入门指南 v0.3.docx' | cut -d ' ' -f 1)" = 'c4f916756602676e5154148cc6f4b74118142ff4efb31fb78169ec6c70727142'
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.3.0" >/dev/null 2>&1; then
             echo 'v0.3.0 tag already exists; refusing to replace it.' >&2
@@ -86,6 +89,7 @@ jobs:
             jq -e --arg sha 'aafb56adf1b6136712b007477f13ef28315b9737' \
               '.id == 12257330538 and .name == "DaylightWorkbench-Windows-x64" and .expired == false and .size_in_bytes == 578426630 and .digest == "sha256:f493f1292c22316d2e2b2cf048a2f3c53cd8920e07bca91441f661520cb4ee10" and .workflow_run.id == 39403979820 and .workflow_run.head_sha == $sha' >/dev/null
       - name: Download validated one-folder app and assemble release assets
+        id: package
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,12 +111,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" |
+            jq -e --arg sha "$GITHUB_SHA" '.object.sha == $sha' >/dev/null
           gh release create v0.3.0 \
             release-assets/DaylightWorkbench-v0.3.0-Windows-x64.zip \
             'release-assets/建筑采光多目标优化平台 入门指南 v0.3.docx' \
             release-assets/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
-            --target '16fa88eeabae6024a4cc6639c1b49ca297d11c8b' \
+            --target "$GITHUB_SHA" \
             --title 'Daylight Workbench v0.3.0 (预览版)' \
             --notes-file RELEASE_NOTES_v0.3.0.md \
             --prerelease
+      - name: Preserve release assets if publication fails
+        if: failure() && steps.package.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DaylightWorkbench-v0.3.0-release-assets-recovery
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
