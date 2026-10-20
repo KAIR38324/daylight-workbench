@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daylight-workbench"
-version = "0.2.0"
-description = "Offline multi-model surrogate optimization desktop workbench with opt-in DeepSeek filtering"
+version = "0.3.0"
+description = "Offline independent-target surrogate optimization desktop workbench with opt-in preference decision support"
 requires-python = ">=3.12,<3.13"
 dynamic = ["dependencies"]
 

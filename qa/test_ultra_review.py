@@ -40,7 +40,7 @@ def tiny_spec(family):
 @pytest.mark.parametrize("mode", ["cv", "fixed"])
 def test_ann_locked_test_labels_outside_float32_cannot_affect_search(mode):
     data = tiny_data()
-    config = SearchConfig([tiny_spec("ann")], mode=mode, folds=2, max_fits=3, cpu_threads=1)
+    config = SearchConfig([tiny_spec("ann")], mode=mode, folds=2, max_fits=3, cpu_threads=1, target_mode='shared')
     baseline = run_model_search(data, config)
     changed = deepcopy(data)
     # Finite float64 labels and finite squared errors, but not representable by
@@ -72,7 +72,7 @@ def test_legacy_ann_locked_test_labels_cannot_affect_early_stopping():
 @pytest.mark.parametrize("family", ["ann", "rf", "xgboost"])
 def test_multitarget_score_and_reload_match_independent_numeric_oracle(family, tmp_path):
     data = tiny_data()
-    config = SearchConfig([tiny_spec(family)], folds=2, max_fits=6, cpu_threads=1)
+    config = SearchConfig([tiny_spec(family)], folds=2, max_fits=6, cpu_threads=1, target_mode='shared')
     result = run_model_search(data, config)
     selected = result.selected
     assert selected.fit_indices == sorted(data.splits["train"] + data.splits["validation"])

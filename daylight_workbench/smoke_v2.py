@@ -25,7 +25,7 @@ def main(gui=False):
         ModelSpec('ann', {'epochs': 2, 'patience': 1, 'learning_rate': .01, 'batch_size': 64}, [LayerSpec(4)]),
         ModelSpec('rf', {'n_estimators': 3, 'max_depth': 3}, []),
         ModelSpec('xgboost', {'n_estimators': 3, 'max_depth': 2, 'learning_rate': .1, 'patience': 1}, []),
-    ], folds=3, max_fits=18, cpu_threads=1)
+    ], folds=3, max_fits=18, cpu_threads=1, target_mode='shared')
     result = run_model_search(data, search)
     assert [c['family'] for c in result.candidates] == ['ann', 'rf', 'xgboost']
     model = result.selected

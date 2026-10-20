@@ -52,6 +52,10 @@ def main():
     shots = [screenshot(window, "main-data.png")]
 
     window.load_demo()
+    # Preserve the historical shared ANN lifecycle regression separately from
+    # the v0.3 independent-target integration smoke.
+    window.search_controls.target_mode.setCurrentIndex(
+        window.search_controls.target_mode.findData('shared'))
     prepared = window.prepare()
     assert len(prepared.frame) == 420
     window.hidden.setText("4")

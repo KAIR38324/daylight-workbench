@@ -12,9 +12,11 @@ def main():
         try:
             from .smoke import main as smoke_main
             from .smoke_v2 import main as smoke_v2_main
+            from .smoke_v3 import main as smoke_v3_main
             smoke_main(['--gui'])
             smoke_v2_main(gui=True)
-            report.write_text(json.dumps({'status': 'passed', 'scope': 'synthetic v0.1 and v0.2 ANN/RF/XGBoost/CV/NSGA/project/external/LLM-local-plan/offscreen-Qt/offline-plot-assets'}, indent=2), encoding='utf-8')
+            smoke_v3_main(gui=True)
+            report.write_text(json.dumps({'status': 'passed', 'scope': 'synthetic v0.1/v0.2 shared ANN/RF/XGBoost and v0.3 independent composite/CV/NSGA/v3-project/fifth-page local preference/offscreen-Qt/offline-plot-assets; no live API'}, indent=2), encoding='utf-8')
         except Exception:
             report.write_text(json.dumps({'status': 'failed', 'error': traceback.format_exc()}, indent=2), encoding='utf-8')
             raise SystemExit(1)

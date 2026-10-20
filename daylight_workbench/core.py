@@ -550,13 +550,27 @@ def export_candidates(path: str | Path, frame: pd.DataFrame, trained: TrainedMod
     safe = frame.copy()
     safe.columns = [('\'' + str(c)) if str(c).startswith(('=', '+', '-', '@', '\t', '\r')) else str(c) for c in safe.columns]
     safe.to_csv(path, index=False, encoding='utf-8-sig', float_format='%.17g')
-    provenance = {'schema_version': 1, 'app': 'Daylight Workbench ' + ('0.2.0' if hasattr(trained, 'spec') else '0.1.0'),
+    composite = hasattr(trained, 'target_models')
+    provenance = {'schema_version': 3 if composite else 1, 'app': 'Daylight Workbench 0.3.0',
                   'notice': '代理模型预测候选，不是经 Radiance / EnergyPlus 验证的物理仿真结果。',
                   'dataset_sha256': trained.data.fingerprint, 'data_config': asdict(trained.data.config),
-                  'training_config': asdict(trained.config), 'best_epoch': trained.best_epoch,
                   'test_metrics': trained.metrics['test'], 'optimization_config': asdict(optimization.config),
                   'exported_rows': len(frame), 'evaluations': optimization.evaluations,
                   'csv_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    if composite:
+        provenance['model_family'] = 'independent_targets'
+        provenance['target_order'] = list(trained.data.config.targets)
+        provenance['target_models'] = {target: {'family': trained.target_models[target].family,
+                                              'spec': asdict(trained.target_models[target].spec),
+                                              'best_epoch': trained.target_models[target].best_epoch,
+                                              'refit_budget': trained.target_models[target].search_metadata.get('refit_budget')}
+                                       for target in trained.data.config.targets}
+        provenance['actual_fit_indices'] = trained.fit_indices
+        provenance['actual_training_support'] = trained.support_bounds
+        provenance['search'] = trained.search_metadata
+    else:
+        provenance['training_config'] = asdict(trained.config)
+        provenance['best_epoch'] = trained.best_epoch
     if hasattr(trained, 'spec'):
         provenance['model_spec'] = asdict(trained.spec)
         provenance['model_family'] = trained.family

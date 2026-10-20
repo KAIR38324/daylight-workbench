@@ -19,7 +19,7 @@ from .core import (DataConfig, TrainConfig, Variable, OptimizeConfig, Cancelled,
                    filter_candidates, export_candidates, prediction_column)
 from .project import save_project, load_project
 from .demo import make_demo
-from .modeling import LayerSpec, ModelSpec, SearchConfig, make_search_plan, run_model_search, FittedSurrogate
+from .modeling import LayerSpec, ModelSpec, SearchConfig, make_search_plan, run_model_search, FittedSurrogate, CompositeSurrogate
 from .modeling_widgets import ANNLayerBuilder, SearchControls
 from .external_results import ExternalMappingDialog, prepare_external_results, export_external
 from .branding import APP_NAME, APP_SUBTITLE, app_icon
@@ -240,6 +240,7 @@ class MainWindow(W.QMainWindow):
         self.make_train_tab()
         self.make_opt_tab()
         self.make_results_tab()
+        self.make_decision_tab()
         footer_widget = W.QFrame()
         footer_widget.setObjectName('statusBar')
         footer = W.QHBoxLayout(footer_widget)
@@ -372,6 +373,9 @@ class MainWindow(W.QMainWindow):
         search_layout = W.QVBoxLayout(search_page)
         self.search_controls = SearchControls(self.layer_builder)
         self.search_controls.changed.connect(self.invalidate_training)
+        self.search_controls.target_mode.currentIndexChanged.connect(self.refresh_model_io)
+        self.epochs.valueChanged.connect(self.search_controls.discard_restored_candidates)
+        self.patience.valueChanged.connect(self.search_controls.discard_restored_candidates)
         scroll = W.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.search_controls)
@@ -397,6 +401,10 @@ class MainWindow(W.QMainWindow):
             summary_layout.addLayout(col, 1)
             self.training_stats[key] = value
         report_layout.addWidget(self.training_summary)
+        self.selected_model_summary = W.QLabel('逐目标选优结果将在训练完成后显示。')
+        self.selected_model_summary.setWordWrap(True)
+        self.selected_model_summary.setProperty('role', 'muted')
+        report_layout.addWidget(self.selected_model_summary)
         self.metrics_model = FrameModel()
         self.metrics_view = table_view(self.metrics_model)
         self.metrics_view.setMinimumHeight(145)
@@ -405,9 +413,9 @@ class MainWindow(W.QMainWindow):
         self.metrics_view.setToolTip('逐目标、逐划分指标。悬停可查看完整目标名与数值；MSE 使用平方单位，R² 可为负数。')
         report_layout.addWidget(self.metrics_view, 1)
         self.search_model = FrameModel()
-        self.search_hint = help_label('候选只按验证集排名，测试集不参与选优。', '选择分数为各目标 RMSE 除以对应训练折目标标准差后等权平均，越低越好。目标常量时标准差按 1 处理。')
+        self.search_hint = help_label('候选只按验证集排名，测试集不参与选优。', '独立模式为每个目标分别计算外层验证RMSE / 该目标外层训练标准差，再跨折平均；共享模式才跨目标等权平均。越低越好，常量标准差按1处理。')
         self.search_view = table_view(self.search_model)
-        self.search_view.setMaximumHeight(105)
+        self.search_view.setMaximumHeight(180)
         self.search_hint.hide()
         self.search_view.hide()
         search_row = W.QHBoxLayout()
@@ -451,7 +459,7 @@ class MainWindow(W.QMainWindow):
         row.addStretch()
         row.addWidget(self.train_button)
         layout.addLayout(row)
-        self.search_label = help_label('默认锁定 15% 测试集，开发集做 5 折交叉验证。', '同组和相同输入不会跨折。ANN/XGBoost 使用外层训练折内部留出的早停集；选优后用全部开发集重拟合，最后仅评估一次测试集。')
+        self.search_label = help_label('默认逐目标独立选模型，共用锁定测试集与组安全 5 折清单。', '同组和相同输入不会跨折。ANN/XGBoost 使用外层训练折内部留出的早停集；选优后用全部开发集重拟合，最后仅评估一次测试集。')
         self.train_label = help_label('尚未训练。', 'ANN 显示真实训练/验证损失；RF 显示已拟合树数；XGBoost 显示逐目标迭代 RMSE，不生成伪造曲线。')
         layout.addWidget(self.search_label)
         layout.addWidget(self.train_label)
@@ -478,13 +486,23 @@ class MainWindow(W.QMainWindow):
             pass
         self.invalidate_training()
 
+    def refresh_model_io(self, inputs=None, targets=None):
+        if targets is None:
+            if self.raw is None:
+                return
+            config = self.data_config()
+            inputs, targets = len(config.inputs), len(config.targets)
+        outputs = 1 if self.search_controls.target_mode.currentData() == 'independent' else targets
+        self.layer_builder.set_io(inputs, outputs)
+
     def preview_search(self):
         def preview():
             data = self.prepared or self.prepare()
             config = self.search_controls.configuration(self.epochs.value(), self.patience.value())
             plan = make_search_plan(data, config)
-            self.search_label.setText(f"{plan['candidate_count']} 候选 × {plan['fold_count']} 折 = {plan['candidate_fold_jobs']} 次验证；拟合预算 {plan['fit_budget']}/{config.max_fits}。锁定测试 {len(plan['test'])} 行。")
-            self.search_label.setToolTip('拟合预算包含 XGBoost 每目标独立拟合及最终重拟合。开发集 ' + str(len(plan['development'])) + ' 行；内部早停不查看外层验证集和锁定测试集。')
+            prefix = (f"独立 {plan['target_count']} 目标 × " if config.target_mode == 'independent' else '共享模式 · ')
+            self.search_label.setText(prefix + f"{plan['candidate_count']} 候选 × {plan['fold_count']} 折 = {plan['candidate_fold_jobs']} 次验证；含最终重拟合的总拟合预算 {plan['fit_budget']}/{config.max_fits}。锁定测试 {len(plan['test'])} 行。")
+            self.search_label.setToolTip(('每目标最多 ' + str(plan['per_target_fit_budget']) + ' 次拟合，所有目标求和。' if config.target_mode == 'independent' else '共享模式中XGBoost逐目标booster单独计数。') + '开发集 ' + str(len(plan['development'])) + ' 行；每个目标同用折清单，缩放器仅拟合各实际训练子集；内部早停不查看外层验证或测试。')
             return data, config
         return self.safe(preview)
 
@@ -507,24 +525,32 @@ class MainWindow(W.QMainWindow):
 
     def show_search_summary(self):
         metadata = getattr(self.trained, 'search_metadata', {})
+        records = metadata.get('target_results')
         rows = []
-        for candidate in metadata.get('candidates', []):
-            row = {'候选': candidate['candidate'], '模型': candidate['family'], '验证分数均值↓': candidate['score_mean'],
-                   '折间分数标准差': candidate['score_std'], '选中': candidate['candidate'] == metadata.get('selected_index', -1) + 1,
-                   '规格': json.dumps(candidate['spec'], ensure_ascii=False)}
-            for target, metrics in candidate['metric_spread'].items():
-                for metric, values in metrics.items():
-                    row[f'{target} {metric}均值'] = values['mean']
-                    row[f'{target} {metric}折间std'] = values['std']
-            rows.append(row)
+        summaries = list(records.items()) if records else [('', metadata)]
+        for target, record in summaries:
+            for candidate in record.get('candidates', []):
+                row = {'目标': target or '共享全部目标', '候选': candidate['candidate'], '模型': candidate['family'],
+                       '验证分数均值↓': candidate['score_mean'], '折间分数标准差': candidate['score_std'],
+                       '选中': candidate['candidate'] == record.get('selected_index', -1) + 1,
+                       '规格': json.dumps(candidate['spec'], ensure_ascii=False)}
+                for name, metrics in candidate['metric_spread'].items():
+                    for metric, values in metrics.items():
+                        row[f'{name} {metric}均值'] = values['mean']
+                        row[f'{name} {metric}折间std'] = values['std']
+                rows.append(row)
         self.search_model.set_frame(pd.DataFrame(rows))
         self.search_hint.setVisible(bool(rows))
         self.search_toggle_button.setVisible(bool(rows))
         self.search_view.setVisible(bool(rows) and self.search_toggle_button.isChecked())
         if rows:
             plan = metadata['plan']
-            self.search_label.setText(f"验证选中候选 {metadata['selected_index']+1}（{self.trained.family}）；开发集 {len(self.trained.fit_indices)} 行重拟合，锁定测试 {len(plan['test'])} 行。")
-            self.search_label.setToolTip('共 ' + str(plan['candidate_count']) + ' 个候选、' + str(plan['fold_count']) + ' 折。分数为各目标 RMSE 除以外层训练折目标标准差后等权平均；常量标准差按 1 处理。表格含原单位指标及折间波动。')
+            if records:
+                chosen = '；'.join(f"{target} → {record['family'].upper()} / 候选{record['selected_index']+1}" for target, record in records.items())
+                self.search_label.setText(f"逐目标独立选优：{chosen}。同用开发集 {len(self.trained.fit_indices)} 行重拟合、锁定测试 {len(plan['test'])} 行。")
+            else:
+                self.search_label.setText(f"共享选优：候选 {metadata['selected_index']+1}（{self.trained.family}）；开发集 {len(self.trained.fit_indices)} 行重拟合，锁定测试 {len(plan['test'])} 行。")
+            self.search_label.setToolTip(f"{plan['candidate_count']} 个有界候选、{plan['fold_count']} 折，总拟合预算 {plan['fit_budget']}。独立模式各目标分别选优；分数为外层验证RMSE / 外层训练目标标准差（常量按1）。测试集不用于选模型。")
 
     def make_opt_tab(self):
         tab = W.QWidget()
@@ -654,6 +680,61 @@ class MainWindow(W.QMainWindow):
         layout.addWidget(self.result_splitter, 1)
         self.tabs.addTab(tab, '04  结果分析与导出')
 
+    def make_decision_tab(self):
+        from .decision_page import PreferenceDecisionPage
+        self.decision_page = PreferenceDecisionPage(self)
+        self.decision_page.selectionChanged.connect(self.decision_selection_changed)
+        self.decision_page.planApplied.connect(self.decision_plan_applied)
+        self.tabs.addTab(self.decision_page, '05  偏好决策 / DeepSeek')
+
+    def refresh_decision_source(self):
+        """Pass only candidate results, never training rows, to the decision page."""
+        from .preference_engine import ObjectiveSpec
+        source = self.analysis_frame()
+        if source is None:
+            self.decision_page.clear_candidates()
+            return
+        directions = (self.external_results.directions if self.external_results is not None
+                      else self.optimization.config.directions)
+        specs = []
+        for target in self.analysis_targets():
+            # Suggested aliases are visible and require one user confirmation.
+            # Names/units are not silently treated as verified building physics.
+            name = target.lower().replace(' ', '')
+            aliases = ()
+            if name in ('udi', 'sda', 'da', 'daylight', '采光'):
+                aliases = ('采光', 'daylight')
+            elif name in ('eui', 'energy', 'energyuse', '能耗'):
+                aliases = ('能耗', 'energy')
+            elif name in ('dgp', 'dgi', 'ugr', 'glare', '眩光'):
+                aliases = ('眩光', 'glare')
+            specs.append(ObjectiveSpec(self.objective_column(target), target,
+                                       directions[target], aliases))
+        self.decision_page.set_candidates(source, specs, self.analysis_inputs(),
+                                          self.results_model.frame.candidate_id.tolist())
+
+    def decision_plan_applied(self, frame, plan):
+        # Keep the comparison view intact. The dedicated recommendation table is
+        # the filtered/ranked shortlist; stable IDs highlight its first rows here.
+        # In particular Apply must not shrink a current_view scope to its own top-k.
+        self.last_filter_plan = {'kind': 'preference_v1', 'plan': plan}
+        self.results_label.setText(f'已应用审核后的偏好计划，推荐 {len(frame)} 个现有候选；推荐列表在偏好决策页，结果表保留对照背景并联动选中。')
+        self.status.setText(self.results_label.text())
+        self.draw_results()
+
+    def decision_selection_changed(self, ids):
+        source = self.analysis_frame()
+        if source is None:
+            return
+        # A click on the full-background plot may select a non-shortlisted row.
+        # Reveal the original rows rather than losing that linked selection.
+        if not set(ids) <= set(self.results_model.frame.get('candidate_id', [])):
+            self.results_model.set_frame(source.copy().reset_index(drop=True))
+            self.arrange_results_columns()
+            self.draw_results()
+        self.plot_selection_changed(ids)
+        self.interactive_plot.set_selection(ids)
+
     def toggle_results_table(self):
         show = not self.results_table.isVisible()
         self.results_table.setVisible(show)
@@ -708,6 +789,7 @@ class MainWindow(W.QMainWindow):
         self.search_hint.hide()
         self.search_view.hide()
         self.search_toggle_button.hide()
+        self.selected_model_summary.setText('逐目标选优结果将在训练完成后显示。')
         self.results_model.set_frame(pd.DataFrame())
         self.training_figure.clear()
         empty_figure(self.training_figure, 'Training settings changed', 'Run the model again to refresh diagnostics.')
@@ -720,6 +802,8 @@ class MainWindow(W.QMainWindow):
         self.train_label.setText('当前定义/训练配置已修改，需要重新训练。')
         self.results_label.setText('当前无有效优化结果。')
         self.interactive_plot.setVisible(False)
+        if self.analysis_frame() is None:
+            self.decision_page.clear_candidates()
         self.update_enabled()
 
     def invalidate_optimization(self, *args):
@@ -731,6 +815,8 @@ class MainWindow(W.QMainWindow):
         self.results_canvas.draw_idle()
         self.results_label.setText('优化设置已修改，旧优化结果已失效；模型仍有效。')
         self.interactive_plot.setVisible(False)
+        if self.analysis_frame() is None:
+            self.decision_page.clear_candidates()
 
     def role_changed(self):
         self.invalidate_data()
@@ -749,6 +835,8 @@ class MainWindow(W.QMainWindow):
         self.results_canvas.draw_idle()
         self.results_label.setText('目标方向已修改，旧优化结果已失效。')
         self.interactive_plot.setVisible(False)
+        if self.analysis_frame() is None:
+            self.decision_page.clear_candidates()
         self.refresh_directions_label()
 
     def refresh_directions_label(self):
@@ -802,7 +890,7 @@ class MainWindow(W.QMainWindow):
         self.refresh_directions_label()
         self.status.setText('数据已加载。请显式定义X/Y、排除ID；目标方向在优化前必须选择。')
         if config:
-            self.layer_builder.set_io(len(config.inputs), len(config.targets))
+            self.refresh_model_io(len(config.inputs), len(config.targets))
         self.update_enabled()
 
     def import_data(self):
@@ -843,7 +931,7 @@ class MainWindow(W.QMainWindow):
         if self.raw is None:
             raise ValueError('请先导入数据。')
         prepared = prepare_data(self.raw, self.data_config())
-        self.layer_builder.set_io(len(prepared.config.inputs), len(prepared.config.targets))
+        self.refresh_model_io(len(prepared.config.inputs), len(prepared.config.targets))
         self.prepared = prepared
         counts = prepared.report['split_counts']
         self.data_report.setText(f"校验通过 · 有效 {len(prepared.frame):,} 行 · 训练 {counts['train']} / 验证 {counts['validation']} / 测试 {counts['test']} · 删除重复 {prepared.report['duplicates_removed']} 行" + (f" · {prepared.report['warning']}" if prepared.report['warning'] else ''))
@@ -859,10 +947,22 @@ class MainWindow(W.QMainWindow):
         def start():
             data = self.prepared or self.prepare()
             config = self.training_config()
-            config.validate(len(data.config.inputs), len(data.config.targets))
-            self.train_tabs.setCurrentIndex(2)
-            self.begin_training_display()
-            self.start_worker(lambda cancel, progress, snapshot: train_model(data, config, cancel, progress, snapshot), self.training_ready, structured=True)
+            independent = self.search_controls.target_mode.currentData() == 'independent'
+            config.validate(len(data.config.inputs), 1 if independent else len(data.config.targets))
+            if independent:
+                spec = ModelSpec('ann', {'epochs': config.epochs, 'patience': config.patience,
+                                         'learning_rate': config.learning_rate, 'batch_size': config.batch_size},
+                                 self.layer_builder.specification())
+                search = SearchConfig([spec], mode='fixed', max_fits=self.search_controls.max_fits.value(),
+                                      seed=config.seed, cpu_threads=self.search_controls.threads.value(), target_mode='independent')
+                make_search_plan(data, search)
+                self.train_tabs.setCurrentIndex(2)
+                self.begin_training_display()
+                self.start_worker(lambda cancel, progress, snapshot: run_model_search(data, search, cancel, progress, snapshot), self.search_ready, structured=True)
+            else:
+                self.train_tabs.setCurrentIndex(2)
+                self.begin_training_display()
+                self.start_worker(lambda cancel, progress, snapshot: train_model(data, config, cancel, progress, snapshot), self.training_ready, structured=True)
         self.safe(start)
 
     def begin_training_display(self):
@@ -936,7 +1036,7 @@ class MainWindow(W.QMainWindow):
             self.training_stats['epoch'].setText(str(event.get('epoch', '—')))
             self.training_stats['best'].setText(str(event.get('best_epoch', '—')))
             self.training_stats['loss'].setText(f'{last_val:.5g}' if last_val is not None else '无验证集' if event.get('refit') else '—')
-            self.train_label.setText(f"真实训练进度：{event.get('family','ANN')}，轮次{event.get('epoch')}，最佳{event.get('best_epoch','见验证日志')}，早停{event.get('early_stopped',False)}；{'开发集固定轮数重拟合，无验证曲线' if event.get('refit') else '早停使用内部留出，不是外层验证/测试'}。")
+            self.train_label.setText(f"{event.get('target', '共享目标')} · 真实训练进度：{event.get('family','ANN')}，轮次{event.get('epoch')}，最佳{event.get('best_epoch','见验证日志')}，早停{event.get('early_stopped',False)}；{'开发集固定轮数重拟合，无验证曲线' if event.get('refit') else '早停使用内部留出，不是外层验证/测试'}。")
         elif kind == 'fit':
             self.training_figure.clear()
             ax = self.training_figure.add_subplot(111)
@@ -946,14 +1046,17 @@ class MainWindow(W.QMainWindow):
             ax.set_title('Random forest · completed trees (not a loss curve)', loc='left', fontsize=11, pad=14)
             self.training_canvas.draw_idle()
             self.training_stats['phase'].setText('RF · 训练中')
+            self.training_stats['phase'].setToolTip(str(event.get('target', '')) + ' ' + str(event.get('label', '')))
             self.training_stats['epoch'].setText(f"{event.get('tree',0)} / {event.get('trees',0)}")
             self.training_stats['best'].setText('不适用')
             self.training_stats['loss'].setText('不适用')
-            self.train_label.setText(f"RF真实进度：已拟合{event.get('tree')}/{event.get('trees')}棵树；不显示伪造损失。取消最迟在当前单棵树完成后响应。")
+            self.train_label.setText(f"{event.get('target', '共享目标')} · RF真实进度：已拟合{event.get('tree')}/{event.get('trees')}棵树；不显示伪造损失。取消最迟在当前单棵树完成后响应。")
         elif kind == 'search':
             self.training_stats['phase'].setToolTip(str(event.get('label', '')))
             if event.get('stage') == 'fit':
-                self.train_label.setText(f"候选 {event.get('candidate')}/{event.get('candidates')} · 第 {event.get('fold')}/{event.get('folds')} 折；仅开发集参与交叉验证。")
+                self.train_label.setText(f"{event.get('target', '共享目标')} · 目标 {event.get('target_index', 1)}/{event.get('targets', 1)} · 候选 {event.get('candidate')}/{event.get('candidates')} · 折 {event.get('fold')}/{event.get('folds')} · 总验证任务 {event.get('fit_job')}/{event.get('fit_jobs')}；仅开发集参与。")
+            elif event.get('stage') == 'target_selected':
+                self.selected_model_summary.setText(f"{event.get('target')} 验证选优：{event.get('family', '').upper()} / 候选{event.get('selected_index', 0)+1}；其余目标完成后统一重拟合并评估测试集。")
         elif kind == 'optimization':
             self.show_live_optimization(event)
 
@@ -995,6 +1098,8 @@ class MainWindow(W.QMainWindow):
         self.results_canvas.draw_idle()
         self.results_label.setText('新模型已生效，请重新运行优化。')
         self.interactive_plot.setVisible(False)
+        if self.analysis_frame() is None:
+            self.decision_page.clear_candidates()
         self.status.setText('模型训练完成，请查看逐目标测试指标。')
         self.update_enabled()
 
@@ -1019,21 +1124,36 @@ class MainWindow(W.QMainWindow):
         self.metrics_view.setColumnWidth(1, 285)
         for column in range(2, self.metrics_model.columnCount()):
             self.metrics_view.setColumnWidth(column, 120 if column < 6 else 158)
-        family = getattr(self.trained, 'family', 'ann')
         fit_count = len(getattr(self.trained, 'fit_indices', data.splits['train']))
-        detail = (f"{self.trained.spec.rf_params()['n_estimators']} 棵树" if family == 'rf'
-                  else f'训练轮次 {self.trained.best_epoch}')
-        self.train_label.setText(f'{family.upper()} · 实际拟合 {fit_count} 行 · {detail}。逐目标测试指标见上表。')
-        self.train_label.setToolTip('指标为目标原单位，MSE 为平方单位；常量目标的 R² 未定义。测试集不参与模型选择或早停。')
-        self.training_stats['phase'].setText(f'{family.upper()} · 已完成')
-        self.training_stats['epoch'].setText(str(self.trained.spec.rf_params()['n_estimators']) if family == 'rf' else str(self.trained.history[-1]['epoch']) if self.trained.history else str(self.trained.best_epoch))
-        self.training_stats['best'].setText('不适用' if family == 'rf' else str(self.trained.best_epoch))
-        final_val = self.trained.history[-1].get('validation_loss') if self.trained.history else None
-        self.training_stats['loss'].setText(f'{final_val:.5g}' if final_val is not None else '不适用' if family == 'rf' else '无验证集')
+        independent = isinstance(self.trained, CompositeSurrogate)
+        models = self.trained.target_models if independent else {target: self.trained for target in data.config.targets}
+        descriptions = []
+        for target in data.config.targets:
+            model = models[target]
+            family = getattr(model, 'family', 'ann')
+            if family == 'rf':
+                detail = f"{model.spec.rf_params()['n_estimators']} 棵树 / 深度{model.spec.rf_params()['max_depth']}"
+            elif family == 'xgboost':
+                local = model.search_metadata.get('best_rounds', [])
+                j = 0 if independent else data.config.targets.index(target)
+                detail = f"{local[j] if j < len(local) else model.best_epoch} 轮"
+            else:
+                layers = model.spec.layers if hasattr(model, 'spec') else [LayerSpec(n) for n in model.config.hidden]
+                detail = ' → '.join(str(layer.width) for layer in layers) + f' / {model.best_epoch} 轮'
+            descriptions.append(f'{target}：{family.upper()} · {detail}')
+        mode_label = '逐目标独立模型' if independent or getattr(self.trained, 'search_metadata', {}).get('target_mode') == 'independent' else '共享模型 / 配置'
+        self.selected_model_summary.setText(mode_label + ' | ' + '；'.join(descriptions))
+        self.selected_model_summary.setToolTip('各目标可选不同模型族、架构和超参数。所有目标输出列严格按原目标顺序组合。\n' + '\n'.join(descriptions))
+        self.train_label.setText(f'{mode_label} · 公共实际拟合 {fit_count} 行。逐目标测试指标见上表；切换目标查看对应真实记录。')
+        self.train_label.setToolTip('指标为目标原单位，MSE为平方单位；常量目标R²未定义。所有目标共用测试样本与外层CV折；测试集不参与选择或早停。')
         self.show_search_summary()
         self.target_plot.blockSignals(True)
+        old_target = self.target_plot.currentText()
         self.target_plot.clear()
         self.target_plot.addItems(data.config.targets)
+        previous = self.target_plot.findText(old_target)
+        if previous >= 0:
+            self.target_plot.setCurrentIndex(previous)
         self.target_plot.blockSignals(False)
         self.draw_training()
 
@@ -1042,15 +1162,13 @@ class MainWindow(W.QMainWindow):
             return
         figure = self.training_figure
         figure.clear()
-        family = getattr(self.trained, 'family', 'ann')
-        if family == 'rf':
-            ax, loss_ax = figure.add_subplot(111), None
-        else:
-            ax, loss_ax = figure.subplots(1, 2)
-        style_axis(ax)
-        if loss_ax is not None:
-            style_axis(loss_ax)
         j = max(0, self.target_plot.currentIndex())
+        target = self.trained.data.config.targets[j]
+        model = self.trained.target_models[target] if isinstance(self.trained, CompositeSurrogate) else self.trained
+        family = getattr(model, 'family', 'ann')
+        ax, loss_ax = figure.subplots(1, 2)
+        style_axis(ax)
+        style_axis(loss_ax)
         idx = self.trained.data.splits['test']
         actual = self.trained.data.Y[idx, j]
         pred = self.trained.predict(self.trained.data.X[idx])[:, j]
@@ -1059,30 +1177,41 @@ class MainWindow(W.QMainWindow):
         ax.plot([low, high], [low, high], '--', color='#91a3b2', linewidth=1.1, label='Identity', zorder=2)
         ax.set_xlabel('Actual · held-out test', fontsize=9)
         ax.set_ylabel('Surrogate prediction', fontsize=9)
-        ax.set_title(self.trained.data.config.targets[j], fontsize=10, loc='left', pad=13)
+        ax.set_title(target + ' · ' + family.upper(), fontsize=10, loc='left', pad=13)
         ax.legend(frameon=False, fontsize=8, loc='upper left')
-        if loss_ax is not None:
+        history = model.history
+        if family == 'rf':
+            trees = model.spec.rf_params()['n_estimators']
+            loss_ax.barh(['Trees fitted'], [trees], height=.35, color='#427ca5')
+            loss_ax.set_xlim(0, max(1, trees))
+            loss_ax.set_title('Real fitted trees · not a loss curve', loc='left', fontsize=9, pad=13)
+            self.training_stats['epoch'].setText(str(trees))
+            self.training_stats['best'].setText('不适用')
+            self.training_stats['loss'].setText('不适用')
+        else:
             if family == 'xgboost':
-                for i, series in enumerate(self.trained.search_metadata.get('booster_history', [])):
-                    points = [(h['epoch'], h['train_loss']) for h in series['history']]
-                    if points:
-                        loss_ax.plot([p[0] for p in points], [p[1] for p in points], label=series['target'], linewidth=1.6, color=['#427ca5', '#dc9b32', '#408f88', '#8d79a1'][i % 4])
-                loss_ax.set_ylabel('Scaled training RMSE')
-                loss_ax.set_title('Final refit · no validation set', fontsize=9)
-            else:
-                for key, name, color in [('train_loss', 'Training', '#427ca5'), ('validation_loss', 'Validation', '#dc9b32')]:
-                    points = [(h['epoch'], h.get(key)) for h in self.trained.history if h.get(key) is not None]
-                    if points:
-                        loss_ax.plot([p[0] for p in points], [p[1] for p in points], label=name, color=color, linewidth=1.7)
-                if self.trained.history:
-                    loss_ax.axvline(self.trained.best_epoch, linestyle=':', color='#a3b2bd', linewidth=1, label=f'Best epoch {self.trained.best_epoch}')
-                loss_ax.set_ylabel('Scaled MSE')
-                loss_ax.set_title('Recorded training & validation loss', fontsize=10, loc='left', pad=13)
-                if not any(h.get('validation_loss') is not None for h in self.trained.history):
-                    loss_ax.set_title('Final refit · no validation set', fontsize=9)
+                series = next((series for series in model.search_metadata.get('booster_history', []) if series['target'] == target), {})
+                history = series.get('history', [])
+            for key, name, color in [('train_loss', 'Training', '#427ca5'), ('validation_loss', 'Validation', '#dc9b32')]:
+                points = [(h['epoch'], h.get(key)) for h in history if h.get(key) is not None]
+                if points:
+                    loss_ax.plot([p[0] for p in points], [p[1] for p in points], label=name, color=color, linewidth=1.7)
+            loss_ax.set_ylabel('Scaled RMSE' if family == 'xgboost' else 'Scaled MSE')
+            has_validation = any(h.get('validation_loss') is not None for h in history)
+            loss_ax.set_title('Recorded training & validation' if has_validation else 'Final refit · no validation set', fontsize=9, loc='left', pad=13)
             loss_ax.set_xlabel('Epoch / boosting iteration', fontsize=9)
             if loss_ax.get_legend_handles_labels()[1]:
                 loss_ax.legend(fontsize=8, frameon=False, loc='best')
+            best = model.best_epoch
+            if family == 'xgboost' and not isinstance(self.trained, CompositeSurrogate):
+                rounds = model.search_metadata.get('best_rounds', [])
+                best = rounds[j] if j < len(rounds) else best
+            self.training_stats['epoch'].setText(str(history[-1]['epoch']) if history else str(best))
+            self.training_stats['best'].setText(str(best))
+            final_val = history[-1].get('validation_loss') if history else None
+            self.training_stats['loss'].setText(f'{final_val:.5g}' if final_val is not None else '无验证集')
+        self.training_stats['phase'].setText(f'{family.upper()} · 已完成')
+        self.training_stats['phase'].setToolTip(target + '：当前查看的独立测试目标及对应模型')
         self.training_canvas.draw_idle()
 
     def populate_bounds(self, opt=None):
@@ -1198,18 +1327,9 @@ class MainWindow(W.QMainWindow):
         self.status.setText('外部结果已载入。按用户映射和方向分析；未虚构输入，也未自动认证数据来源/物理有效性。')
 
     def natural_language_filter(self):
-        def run():
-            if self.analysis_frame() is None:
-                raise ValueError('请先生成候选或导入外部结果。')
-            from .llm_dialog import NaturalLanguageFilterDialog
-            dialog = NaturalLanguageFilterDialog(self.results_model.frame.copy(), self)
-            if dialog.exec() == W.QDialog.DialogCode.Accepted:
-                self.results_model.set_frame(dialog.result_frame.reset_index(drop=True))
-                self.last_filter_plan = dialog.plan
-                self.results_label.setText(f'已应用用户审阅的结构化筛选计划；剩余{len(dialog.result_frame)}行。仅筛选/排序现有值，不生成或改写预测。')
-                self.status.setText(self.results_label.text())
-                self.draw_results()
-        self.safe(run)
+        self.tabs.setCurrentWidget(self.decision_page)
+        if self.analysis_frame() is None:
+            self.status.setText('请先生成候选或导入外部结果，再在偏好决策页讨论方案。')
 
     def show_results(self):
         columns = self.analysis_inputs() + [self.objective_column(t) for t in self.analysis_targets()]
@@ -1229,6 +1349,8 @@ class MainWindow(W.QMainWindow):
         self.scatter_y.setCurrentIndex(min(1, self.scatter_y.count() - 1))
         self.scatter_y.blockSignals(False)
         self.apply_filter()
+
+        self.refresh_decision_source()
 
     def arrange_results_columns(self):
         """Put stable identity and objectives first without reordering the data."""
@@ -1281,6 +1403,7 @@ class MainWindow(W.QMainWindow):
         self.draw_results(refresh_interactive=False)
         frame = self.selected_frame()
         self.interactive_plot.set_selection(frame.candidate_id.tolist() if 'candidate_id' in frame else [])
+        self.decision_page.set_selection(frame.candidate_id.tolist() if 'candidate_id' in frame else [])
 
     @C.Slot(list)
     def plot_selection_changed(self, ids):
@@ -1293,7 +1416,14 @@ class MainWindow(W.QMainWindow):
         self.results_table.selectionModel().select(selection, C.QItemSelectionModel.SelectionFlag.ClearAndSelect | C.QItemSelectionModel.SelectionFlag.Rows)
         self._sync_selection = False
         self.draw_results(refresh_interactive=False)
-        self.results_label.setText(f'图表与表格按稳定候选ID联动：选中{len(ids)}行；可直接导出选中行。')
+        # This entry point is also used by project restoration, not only browser
+        # events. Suppressed table signals cannot update the results plot for us.
+        # Cache the original, actually selected IDs in both plots; bridge.ready()
+        # then replays them even when the local browser has not loaded yet.
+        selected_ids = self.selected_frame().candidate_id.tolist()
+        self.interactive_plot.set_selection(selected_ids)
+        self.decision_page.set_selection(selected_ids)
+        self.results_label.setText(f'图表与表格按稳定候选ID联动：选中{len(selected_ids)}行；可直接导出选中行。')
         self.status.setText(self.results_label.text())
 
     def draw_results(self, *args, refresh_interactive=True):
@@ -1303,6 +1433,7 @@ class MainWindow(W.QMainWindow):
         if not set(required) <= set(self.results_model.frame.columns):
             return
         if refresh_interactive:
+            self.decision_page.set_visible_ids(self.results_model.frame.candidate_id.tolist())
             objectives = [self.objective_column(t) for t in self.analysis_targets()]
             if len(objectives) >= 2:
                 self.interactive_plot.setVisible(True)
@@ -1421,18 +1552,32 @@ class MainWindow(W.QMainWindow):
                 return
             self.set_raw(trained.data.frame.copy(), Path(path).name, trained.data.config, optimization.config.directions if optimization else trained.data.config.directions)
             self._loading = True
-            if hasattr(trained, 'spec'):
-                self.search_controls.family.setCurrentIndex(self.search_controls.family.findData(trained.family))
-                if trained.family == 'ann':
-                    self.layer_builder.set_layers(trained.spec.layers)
+            metadata = getattr(trained, 'search_metadata', {})
+            stored_search = SearchConfig.from_dict(metadata['config']) if metadata.get('config') else None
+            reference = trained.target_models[trained.data.config.targets[0]] if isinstance(trained, CompositeSurrogate) else trained
+            editor_spec = next((spec for spec in stored_search.candidates if spec.family == 'ann'), None) if stored_search else None
+            editor_config = editor_spec.train_config(stored_search.seed) if editor_spec else reference.config
+            if editor_spec is not None:
+                self.layer_builder.set_layers(editor_spec.layers)
+            elif hasattr(reference, 'spec'):
+                if reference.family == 'ann':
+                    self.layer_builder.set_layers(reference.spec.layers)
             else:
-                self.layer_builder.set_layers([LayerSpec(w, (trained.config.activations[i] if trained.config.activations else 'relu')) for i,w in enumerate(trained.config.hidden)])
+                self.layer_builder.set_layers([LayerSpec(w, (reference.config.activations[i] if reference.config.activations else 'relu')) for i,w in enumerate(reference.config.hidden)])
             self.hidden.setText(','.join(str(l.width) for l in self.layer_builder.specification()))
-            self.epochs.setValue(trained.config.epochs)
-            self.patience.setValue(trained.config.patience)
-            self.lr.setText(str(trained.config.learning_rate))
-            self.batch.setValue(trained.config.batch_size)
-            self.train_seed.setValue(trained.config.seed)
+            self.epochs.setValue(editor_config.epochs)
+            self.patience.setValue(editor_config.patience)
+            self.lr.setText(str(editor_config.learning_rate))
+            self.batch.setValue(editor_config.batch_size)
+            self.train_seed.setValue(editor_config.seed)
+            if metadata.get('config'):
+                self.search_controls.restore_configuration(stored_search)
+            else:
+                self.search_controls.discard_restored_candidates()
+                self.search_controls.target_mode.setCurrentIndex(self.search_controls.target_mode.findData('shared'))
+                self.search_controls.compare_all.setChecked(False)
+                self.search_controls.family.setCurrentIndex(self.search_controls.family.findData(getattr(reference, 'family', 'ann')))
+            self.refresh_model_io(len(trained.data.config.inputs), len(trained.data.config.targets))
             self._loading = False
             self.trained, self.prepared, self.optimization = trained, trained.data, optimization
             self.external_results = None
@@ -1465,4 +1610,5 @@ class MainWindow(W.QMainWindow):
             self.cancel_task()
             event.ignore()
         else:
+            self.decision_page.shutdown()
             event.accept()

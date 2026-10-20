@@ -5,7 +5,7 @@ preprocessor is fit on the rows actually passed to that model fit. Native JSON,
 tensor-only weights and validated numeric trees are the persistence contracts.
 """
 from __future__ import annotations
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import math
 import threading
 import time
@@ -38,22 +38,39 @@ class ModelSpec:
 
     @classmethod
     def from_dict(cls, value):
+        if (not isinstance(value, dict) or set(value) - {'family', 'params', 'layers'}
+                or not isinstance(value.get('params', {}), dict) or not isinstance(value.get('layers', []), list)):
+            raise ValueError('模型规格结构无效。')
         value = dict(value)
         value['layers'] = [LayerSpec(**layer) for layer in value.get('layers', [])]
         return cls(**value)
 
     def validate(self, n_inputs=1, n_outputs=1):
-        if self.family not in ('ann', 'rf', 'xgboost'):
+        if self.family not in ('ann', 'rf', 'xgboost') or not isinstance(self.params, dict) or not isinstance(self.layers, list):
             raise ValueError('模型必须为ANN、随机森林或XGBoost。')
         allowed = {'ann': {'epochs', 'patience', 'learning_rate', 'batch_size'},
                    'rf': {'n_estimators', 'max_depth', 'min_samples_leaf', 'max_features', 'max_leaf_nodes'},
                    'xgboost': {'n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree', 'reg_lambda', 'patience'}}[self.family]
         if set(self.params) - allowed:
             raise ValueError(f'不支持的{self.family}参数：{set(self.params) - allowed}')
+        integer_params = {'ann': {'epochs', 'patience', 'batch_size'},
+                          'rf': {'n_estimators', 'max_depth', 'min_samples_leaf', 'max_leaf_nodes'},
+                          'xgboost': {'n_estimators', 'max_depth', 'patience'}}[self.family]
+        for key, value in self.params.items():
+            if type(value) not in (int, float) or (key in integer_params and type(value) is not int):
+                raise ValueError('模型参数必须为正确类型的数值，不能用布尔值或文本替代。')
+            try:
+                finite = math.isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite:
+                raise ValueError('模型参数必须是有限值。')
         if self.family == 'ann':
             if not self.layers:
                 raise ValueError('ANN至少需要一层隐藏层。')
             for layer in self.layers:
+                if not isinstance(layer, LayerSpec):
+                    raise ValueError('ANN层规格无效。')
                 layer.validate()
             self.train_config().validate(n_inputs, n_outputs)
             if self.params.get('epochs', 300) > 3000:
@@ -94,20 +111,31 @@ class SearchConfig:
     max_fits: int = 200
     seed: int = 42
     cpu_threads: int = 2
+    target_mode: str = 'independent'
 
     @classmethod
     def from_dict(cls, value):
+        if not isinstance(value, dict) or not isinstance(value.get('candidates'), list):
+            raise ValueError('搜索配置结构无效。')
         value = dict(value)
         value['candidates'] = [ModelSpec.from_dict(v) for v in value['candidates']]
+        # Projects written before independent targets existed meant shared
+        # selection. Never reinterpret their provenance as a different method.
+        value.setdefault('target_mode', 'shared')
         return cls(**value)
 
     def validate(self, data):
-        if self.mode not in ('cv', 'fixed') or not 2 <= self.folds <= 10 or not 1 <= self.max_fits <= 2000 or not 1 <= self.cpu_threads <= 4:
+        if (self.target_mode not in ('independent', 'shared') or self.mode not in ('cv', 'fixed')
+                or any(type(v) is not int for v in (self.folds, self.max_fits, self.cpu_threads, self.seed))
+                or not 0 <= self.seed <= 2**32 - 1 or not 2 <= self.folds <= 10
+                or not 1 <= self.max_fits <= 2000 or not 1 <= self.cpu_threads <= 4):
             raise ValueError('模式/折数/拟合预算/CPU线程数无效。')
-        if not 1 <= len(self.candidates) <= 100:
+        if not isinstance(self.candidates, list) or not 1 <= len(self.candidates) <= 100:
             raise ValueError('一次搜索须有1-100个明确候选，不运行无界AutoML。')
         for spec in self.candidates:
-            spec.validate(len(data.config.inputs), len(data.config.targets))
+            if not isinstance(spec, ModelSpec):
+                raise ValueError('候选必须是明确模型规格。')
+            spec.validate(len(data.config.inputs), 1 if self.target_mode == 'independent' else len(data.config.targets))
 
 
 def _balanced_folds(indices, components, n_folds, seed):
@@ -167,17 +195,22 @@ def make_search_plan(data: PreparedData, config: SearchConfig) -> dict:
         it, iv = inner_split(fold['train'], components, config.seed + k + 100)
         fold['inner_train'], fold['inner_validation'] = it, iv
     outputs = len(data.config.targets)
-    per_candidate = [(outputs if s.family == 'xgboost' else 1) * len(folds) for s in config.candidates]
-    refit_budget = max(outputs if s.family == 'xgboost' else 1 for s in config.candidates)
+    independent = config.target_mode == 'independent'
+    per_candidate = [(outputs if independent or s.family == 'xgboost' else 1) * len(folds) for s in config.candidates]
+    refit_budget = outputs if independent else max(outputs if s.family == 'xgboost' else 1 for s in config.candidates)
     total = sum(per_candidate) + refit_budget
     if total > config.max_fits:
         raise ValueError(f'预算需要最多{total}次实际拟合，超过上限{config.max_fits}。请减少候选/折数或明确提高上限。')
-    return {'schema_version': 1, 'seed': config.seed, 'mode': config.mode, 'test': test,
+    return {'schema_version': 2, 'seed': config.seed, 'mode': config.mode, 'target_mode': config.target_mode, 'test': test,
             'development': development.tolist(), 'components': components.tolist(), 'folds': folds,
             'candidate_count': len(config.candidates), 'fold_count': len(folds),
-            'candidate_fold_jobs': len(config.candidates) * len(folds), 'fit_budget': total,
+            'target_order': list(data.config.targets), 'target_count': outputs,
+            'candidate_fold_jobs': len(config.candidates) * len(folds) * (outputs if independent else 1), 'fit_budget': total,
+            'per_target_fit_budget': len(config.candidates) * len(folds) + 1 if independent else None,
+            'refit_fit_budget': refit_budget,
             'per_candidate_fits': per_candidate, 'test_fraction_actual': len(test) / len(data.frame),
-            'selection_score': 'equal-weight mean per-target RMSE / outer-training target std (constant std -> 1)',
+            'selection_score': ('independent per-target mean outer-fold RMSE / outer-training target std (constant std -> 1)' if independent
+                                else 'equal-weight mean per-target RMSE / outer-training target std (constant std -> 1)'),
             'notice': '测试集锁定且只在选优/重拟合之后评估；不参与候选排名。'}
 
 
@@ -206,7 +239,8 @@ class NumericForest:
         return cls(trees, n_inputs, n_outputs)
 
     def validate(self):
-        if not 1 <= len(self.trees) <= 500 or sum(len(t['left']) for t in self.trees) > 1_100_000:
+        if (type(self.n_inputs) is not int or self.n_inputs < 1 or type(self.n_outputs) is not int or self.n_outputs < 1
+                or not 1 <= len(self.trees) <= 500 or sum(len(t['left']) for t in self.trees) > 1_100_000):
             raise ValueError('森林树数/节点数超出安全限制。')
         for t in self.trees:
             if set(t) != {'left', 'right', 'feature', 'threshold', 'value'}:
@@ -225,6 +259,9 @@ class NumericForest:
             ids = np.arange(n)[internal]
             if np.any(t['left'][internal] <= ids) or np.any(t['right'][internal] <= ids) or np.any(t['left'][internal] >= n) or np.any(t['right'][internal] >= n) or np.any(t['feature'][internal] < 0) or np.any(t['feature'][internal] >= self.n_inputs):
                 raise ValueError('树路径存在环或越界。')
+            children = np.concatenate((t['left'][internal], t['right'][internal]))
+            if sorted(children.tolist()) != list(range(1, n)):
+                raise ValueError('树包含重复子节点或不连通节点。')
 
     def predict(self, X):
         # sklearn converts feature data to float32 before tree threshold comparisons.
@@ -296,13 +333,80 @@ class FittedSurrogate:
         return result
 
 
+def target_data(data: PreparedData, target: str) -> PreparedData:
+    """A scalar label view, retaining exactly the common sample identities.
+
+    Do not prepare/split again: even duplicate rows with conflicting labels
+    must retain the original multi-target project's leakage components.
+    """
+    if target not in data.config.targets:
+        raise ValueError('独立模型的目标不属于项目目标。')
+    config = replace(data.config, targets=[target],
+                     directions={target: data.config.directions[target]} if data.config.directions else {})
+    return PreparedData(data.frame, config, data.splits, data.fingerprint, data.report)
+
+
+@dataclass
+class CompositeSurrogate:
+    """One independently selected scalar model per target, in declared order."""
+    data: PreparedData
+    target_models: dict[str, FittedSurrogate]
+    fit_indices: list[int]
+    metrics: dict = field(default_factory=dict)
+    search_metadata: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.validate()
+
+    @property
+    def family(self):
+        return 'composite'
+
+    @property
+    def support_bounds(self):
+        self.validate()
+        X = self.data.X[self.fit_indices]
+        return {name: (float(X[:, j].min()), float(X[:, j].max())) for j, name in enumerate(self.data.config.inputs)}
+
+    def validate(self):
+        targets = self.data.config.targets
+        if not isinstance(self.target_models, dict) or set(self.target_models) != set(targets):
+            raise ValueError('组合模型必须完整且唯一覆盖项目目标。')
+        if (not isinstance(self.fit_indices, list) or not self.fit_indices
+                or any(type(i) is not int for i in self.fit_indices)
+                or len(set(self.fit_indices)) != len(self.fit_indices)
+                or min(self.fit_indices) < 0 or max(self.fit_indices) >= len(self.data.frame)):
+            raise ValueError('组合模型公共拟合索引无效。')
+        for target in targets:
+            model = self.target_models[target]
+            if (not isinstance(model, FittedSurrogate) or model.data.config.targets != [target]
+                    or model.data.config.inputs != self.data.config.inputs
+                    or model.data.frame is not self.data.frame
+                    or model.data.splits != self.data.splits or model.data.fingerprint != self.data.fingerprint
+                    or model.fit_indices != self.fit_indices):
+                raise ValueError('组合子模型的目标、输入顺序或公共拟合样本不一致。')
+
+    def predict(self, X):
+        self.validate()
+        X = np.asarray(X, dtype=np.float64)
+        if X.ndim != 2 or X.shape[1] != len(self.data.config.inputs) or not np.isfinite(X).all():
+            raise ValueError('组合模型预测输入维度或数值无效。')
+        # A dict's insertion order is deliberately NOT the output contract.
+        columns = [self.target_models[target].predict(X) for target in self.data.config.targets]
+        result = np.column_stack([column[:, 0] for column in columns])
+        if result.shape != (len(X), len(self.data.config.targets)) or not np.isfinite(result).all():
+            raise ValueError('组合模型预测输出维度或数值无效。')
+        return result
+
+
 @dataclass
 class ModelSearchResult:
-    selected: FittedSurrogate
+    selected: FittedSurrogate | CompositeSurrogate
     config: SearchConfig
     plan: dict
     candidates: list[dict]
-    selected_index: int
+    selected_index: int | dict[str, int]
+    target_results: dict[str, dict] = field(default_factory=dict)
 
 
 def _fit_ann(data, spec, train, validation, seed, cancel, progress, snapshot, context, fixed_epochs=None):
@@ -377,8 +481,10 @@ def _fit_ann(data, spec, train, validation, seed, cancel, progress, snapshot, co
 
 
 def _fit_rf(data, spec, train, seed, threads, cancel, progress, snapshot, context):
-    xs, ys = Scale.fit(data.X[train]), Scale.fit(data.Y[train])
-    X, Y = xs.transform(data.X[train]), ys.transform(data.Y[train])
+    frame = data.frame.iloc[train]
+    train_x, train_y = frame[data.config.inputs].to_numpy(float), frame[data.config.targets].to_numpy(float)
+    xs, ys = Scale.fit(train_x), Scale.fit(train_y)
+    X, Y = xs.transform(train_x), ys.transform(train_y)
     p = spec.rf_params()
     count = p.pop('n_estimators')
     forest = RandomForestRegressor(**p, n_estimators=1, random_state=seed, n_jobs=threads, warm_start=True)
@@ -401,8 +507,15 @@ def _fit_rf(data, spec, train, seed, threads, cancel, progress, snapshot, contex
 
 def _fit_xgb(data, spec, train, validation, seed, threads, cancel, progress, snapshot, context, fixed_rounds=None):
     import xgboost as xgb
-    xs, ys = Scale.fit(data.X[train]), Scale.fit(data.Y[train])
-    X, Y = xs.transform(data.X), ys.transform(data.Y)
+    frame = data.frame.iloc[train]
+    train_x, train_y = frame[data.config.inputs].to_numpy(float), frame[data.config.targets].to_numpy(float)
+    xs, ys = Scale.fit(train_x), Scale.fit(train_y)
+    X, Y = xs.transform(train_x), ys.transform(train_y)
+    X_val = Y_val = None
+    if validation:
+        val_frame = data.frame.iloc[validation]
+        X_val = xs.transform(val_frame[data.config.inputs].to_numpy(float))
+        Y_val = ys.transform(val_frame[data.config.targets].to_numpy(float))
     p = spec.xgb_params()
     rounds, patience = p.pop('n_estimators'), p.pop('patience')
     p = {'objective': 'reg:squarederror', 'eval_metric': 'rmse', 'tree_method': 'hist',
@@ -410,10 +523,10 @@ def _fit_xgb(data, spec, train, validation, seed, threads, cancel, progress, sna
     boosters, best_rounds, all_history = [], [], []
     for j, target in enumerate(data.config.targets):
         check_cancel(cancel)
-        dm = xgb.DMatrix(X[train], label=Y[train, j])
+        dm = xgb.DMatrix(X, label=Y[:, j])
         evals = [(dm, 'train')]
         if validation:
-            evals.append((xgb.DMatrix(X[validation], label=Y[validation, j]), 'validation'))
+            evals.append((xgb.DMatrix(X_val, label=Y_val[:, j]), 'validation'))
         records = {}
         local_history = []
         class Monitor(xgb.callback.TrainingCallback):
@@ -436,6 +549,11 @@ def _fit_xgb(data, spec, train, validation, seed, threads, cancel, progress, sna
         boosters.append(booster)
         best_rounds.append(best)
         all_history.append({'target': target, 'history': local_history})
+        if snapshot:
+            snapshot({'kind': 'loss', **context, 'family': 'xgboost', 'target': target,
+                      'epoch': len(local_history), 'best_epoch': best, 'metric': 'scaled RMSE',
+                      'refit': fixed_rounds is not None, 'early_stopped': bool(validation and len(local_history) < count),
+                      'history': list(local_history)})
         if progress:
             progress(f"{context.get('label','XGBoost')}：目标{target}，真实迭代{len(local_history)}，保留{best}轮")
     result = FittedSurrogate(data, spec, boosters, xs, ys, list(train), best_epoch=max(best_rounds))
@@ -456,29 +574,37 @@ def _fit(data, spec, outer_train, inner_train, inner_val, seed, threads, cancel,
                     context, fixed_rounds=fixed_budget)
 
 
-def run_model_search(data: PreparedData, config: SearchConfig, cancel=None, progress=None, snapshot=None) -> ModelSearchResult:
-    import torch
-    plan = make_search_plan(data, config)
-    torch.set_num_threads(config.cpu_threads)
-    check_cancel(cancel)
+def _rows(data, indices, columns):
+    return data.frame.iloc[indices][columns].to_numpy(dtype=np.float64)
+
+
+def _search_candidates(data, config, plan, cancel, progress, snapshot, target_context, job_counter):
+    """Evaluate only development folds. No locked-test labels are materialized."""
     results, epoch_counts = [], []
     for ci, spec in enumerate(config.candidates):
         folds, budgets = [], []
         for fi, fold in enumerate(plan['folds']):
             check_cancel(cancel)
-            context = {'candidate': ci + 1, 'candidates': len(config.candidates), 'fold': fi + 1,
-                       'folds': len(plan['folds']), 'label': f'{spec.family} 候选{ci+1} 折{fi+1}'}
+            job_counter[0] += 1
+            prefix = (target_context.get('target', '') + ' · ') if target_context else ''
+            context = {**target_context, 'candidate': ci + 1, 'candidates': len(config.candidates),
+                       'fold': fi + 1, 'folds': len(plan['folds']), 'fit_job': job_counter[0],
+                       'fit_jobs': plan['candidate_fold_jobs'],
+                       'label': f'{prefix}{spec.family} 候选{ci+1} 折{fi+1}'}
             if snapshot:
                 snapshot({'kind': 'search', **context, 'stage': 'fit', 'fit_budget': plan['fit_budget']})
             fit = _fit(data, spec, fold['train'], fold['inner_train'], fold['inner_validation'],
                        config.seed + fi, config.cpu_threads, cancel, progress, snapshot, context)
-            actual = data.Y[fold['validation']]
-            predicted = fit.predict(data.X[fold['validation']])
+            check_cancel(cancel)
+            actual = _rows(data, fold['validation'], data.config.targets)
+            predicted = fit.predict(_rows(data, fold['validation'], data.config.inputs))
             metrics = metric_report(actual, predicted, data.config.targets)
-            std = data.Y[fold['train']].std(axis=0)
+            std = _rows(data, fold['train'], data.config.targets).std(axis=0)
             denom = np.where(std < 1e-12, 1., std)
             per_target = np.sqrt(np.mean((actual - predicted)**2, axis=0)) / denom
             score = float(per_target.mean())
+            if not math.isfinite(score):
+                raise ValueError('候选验证分数非有限，无法科学选优。')
             folds.append({'fold': fi + 1, 'metrics': metrics, 'score': score,
                           'normalization_std': denom.tolist(), 'constant_training_targets': (std < 1e-12).tolist(),
                           'fit_indices': fit.fit_indices, 'best_epoch': fit.best_epoch,
@@ -495,6 +621,7 @@ def run_model_search(data: PreparedData, config: SearchConfig, cancel=None, prog
                 spread[target][key] = {'mean': float(np.mean(values)) if values else None,
                                        'std': float(np.std(values)) if values else None}
         results.append({'candidate': ci + 1, 'family': spec.family, 'spec': asdict(spec),
+                        **({'target': target_context['target']} if target_context else {}),
                         'score_mean': float(np.mean(scores)), 'score_std': float(np.std(scores)),
                         'folds': folds, 'metric_spread': spread})
         epoch_counts.append(budgets)
@@ -506,18 +633,87 @@ def run_model_search(data: PreparedData, config: SearchConfig, cancel=None, prog
         budget = max(1, int(np.median(epoch_counts[chosen])))
     elif spec.family == 'xgboost':
         budget = np.maximum(1, np.median(np.array(epoch_counts[chosen]), axis=0).astype(int)).tolist()
-    if progress:
-        progress(f'验证选优完成：候选{chosen+1} {spec.family}；使用全部开发集重拟合，未查看测试集。')
-    selected = _fit(data, spec, plan['development'], [], [], config.seed, config.cpu_threads, cancel,
-                    progress, snapshot, {'candidate': chosen + 1, 'label': '最终开发集重拟合', 'stage': 'refit'},
-                    fixed_budget=budget if spec.family != 'rf' else 1)
+    return results, chosen, budget
+
+
+def _refit_winner(data, config, plan, results, chosen, budget, cancel, progress, snapshot, target_context):
     check_cancel(cancel)
-    selected.metrics['train'] = metric_report(data.Y[selected.fit_indices], selected.predict(data.X[selected.fit_indices]), data.config.targets)
-    # This is the first use of the locked test targets in the entire search.
-    selected.metrics['test'] = metric_report(data.Y[plan['test']], selected.predict(data.X[plan['test']]), data.config.targets)
-    selected.search_metadata.update({'schema_version': 1, 'seed': config.seed, 'config': asdict(config),
-                                     'plan': plan, 'candidates': results, 'selected_index': chosen,
-                                     'refit_budget': budget, 'selection_score': plan['selection_score']})
+    spec = config.candidates[chosen]
+    prefix = (target_context.get('target', '') + ' · ') if target_context else ''
+    if progress:
+        progress(f'{prefix}验证选优完成：候选{chosen+1} {spec.family}；全部开发集重拟合，未查看测试集。')
+    context = {**target_context, 'candidate': chosen + 1, 'family': spec.family,
+               'label': prefix + '最终开发集重拟合', 'stage': 'refit'}
     if snapshot:
-        snapshot({'kind': 'search', 'stage': 'complete', 'selected_index': chosen, 'test_metrics': selected.metrics['test']})
-    return ModelSearchResult(selected, config, plan, results, chosen)
+        snapshot({'kind': 'search', **context})
+    selected = _fit(data, spec, plan['development'], [], [], config.seed, config.cpu_threads, cancel,
+                    progress, snapshot, context, fixed_budget=budget if spec.family != 'rf' else 1)
+    selected.search_metadata.update({'schema_version': 2, 'seed': config.seed, 'target_mode': config.target_mode,
+                                     'config': asdict(config), 'plan': plan, 'candidates': results,
+                                     'selected_index': chosen, 'refit_budget': budget,
+                                     'selection_score': plan['selection_score']})
+    check_cancel(cancel)
+    return selected
+
+
+def run_model_search(data: PreparedData, config: SearchConfig, cancel=None, progress=None, snapshot=None) -> ModelSearchResult:
+    import torch
+    plan = make_search_plan(data, config)
+    torch.set_num_threads(config.cpu_threads)
+    check_cancel(cancel)
+    jobs = [0]
+    targets = data.config.targets
+    if config.target_mode == 'shared':
+        results, chosen, budget = _search_candidates(data, config, plan, cancel, progress, snapshot, {}, jobs)
+        selected = _refit_winner(data, config, plan, results, chosen, budget, cancel, progress, snapshot, {})
+        per_target = {}
+    else:
+        winners, per_target, results = {}, {}, []
+        # Selection is target-specific, but every target sees the exact same
+        # fold and inner early-stop indices. Different winners are permitted.
+        selections = {}
+        for j, target in enumerate(targets):
+            view = target_data(data, target)
+            context = {'target': target, 'target_index': j + 1, 'targets': len(targets),
+                       'target_mode': 'independent'}
+            local, chosen, budget = _search_candidates(view, config, plan, cancel, progress, snapshot, context, jobs)
+            selections[target] = (view, local, chosen, budget, context)
+            per_target[target] = {'target': target, 'selected_index': chosen, 'family': config.candidates[chosen].family,
+                                  'spec': asdict(config.candidates[chosen]), 'candidates': local, 'refit_budget': budget}
+            results.extend(local)
+            if snapshot:
+                snapshot({'kind': 'search', **context, 'stage': 'target_selected',
+                          'selected_index': chosen, 'family': config.candidates[chosen].family,
+                          'score': local[chosen]['score_mean']})
+        # Refit all winners before the FIRST access to any locked-test labels.
+        for target in targets:
+            view, local, chosen, budget, context = selections[target]
+            winners[target] = _refit_winner(view, config, plan, local, chosen, budget, cancel, progress, snapshot, context)
+        chosen = {target: per_target[target]['selected_index'] for target in targets}
+        if len(targets) == 1:
+            # A scalar target is already an independent model. Keep the public
+            # v2 scalar artifact/API compatible for existing projects/tests.
+            selected = winners[targets[0]]
+            chosen = chosen[targets[0]]
+            selected.search_metadata['target_results'] = per_target
+        else:
+            selected = CompositeSurrogate(data, winners, list(plan['development']), search_metadata={
+                'schema_version': 3, 'seed': config.seed, 'target_mode': 'independent',
+                'target_order': list(targets), 'config': asdict(config), 'plan': plan,
+                'target_results': per_target, 'selected_index': chosen,
+                'selection_score': plan['selection_score']})
+    check_cancel(cancel)
+    # First locked-test label access in the search. Never select a family,
+    # hyperparameter, architecture, epoch or boosting round from these values.
+    for split, indices in (('train', plan['development']), ('test', plan['test'])):
+        actual = _rows(data, indices, targets)
+        predicted = selected.predict(_rows(data, indices, data.config.inputs))
+        selected.metrics[split] = metric_report(actual, predicted, targets)
+        if isinstance(selected, CompositeSurrogate):
+            for target in targets:
+                selected.target_models[target].metrics[split] = {target: selected.metrics[split][target]}
+    check_cancel(cancel)
+    if snapshot:
+        snapshot({'kind': 'search', 'stage': 'complete', 'target_mode': config.target_mode,
+                  'selected_index': chosen, 'test_metrics': selected.metrics['test']})
+    return ModelSearchResult(selected, config, plan, results, chosen, per_target)

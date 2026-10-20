@@ -317,3 +317,26 @@ def request_plan(settings: RequestSettings, key: str, preview: dict[str, Any],
         raise
     except (KeyError, IndexError, TypeError, ValueError):
         raise RequestError("Provider response has an unexpected shape.") from None
+
+
+# The original numerical-filter API above is deliberately preserved for old
+# projects/tests. The dedicated conversation page uses this richer strict schema.
+# Lazy imports avoid a circular dependency and reuse the same vetted transport.
+def build_preference_preview(frame, query, objectives, preference_state=None):
+    from .preference_engine import build_preference_preview as build
+    return build(frame, query, objectives, preference_state)
+
+
+def preference_request_body(preview, settings=RequestSettings()):
+    from .preference_engine import preference_request_body as build
+    return build(preview, settings)
+
+
+def validate_preference_plan(raw_plan, frame_or_preview, objectives=None):
+    from .preference_engine import validate_preference_plan as validate
+    return validate(raw_plan, frame_or_preview, objectives)
+
+
+def request_preference_plan(settings, key, preview, transport=None):
+    from .preference_engine import request_preference_plan as send
+    return send(settings, key, preview, transport)

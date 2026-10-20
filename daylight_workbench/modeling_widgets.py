@@ -197,7 +197,12 @@ class SearchControls(W.QWidget):
         for name, value in [('ANN 神经网络', 'ann'), ('RF 随机森林', 'rf'), ('XGBoost 梯度提升', 'xgboost')]:
             self.family.addItem(name, value)
         self.compare_all = W.QCheckBox('比较 ANN、RF 与 XGBoost')
-        self.compare_all.setToolTip('三类模型共用同一折清单，分别使用右侧明确配置的网格。')
+        self.compare_all.setChecked(True)
+        self.compare_all.setToolTip('各目标分别比较三类模型，可选择不同模型族、架构和参数；所有目标共用同一折清单。')
+        self.target_mode = W.QComboBox()
+        self.target_mode.addItem('逐目标独立建模（默认，可选不同模型）', 'independent')
+        self.target_mode.addItem('共享多输出 / 共同配置（兼容模式）', 'shared')
+        self.target_mode.setToolTip('独立模式逐目标选优并组合预测。共享模式ANN/RF共享多输出结构，XGBoost仍为逐目标booster，但共同选择一套候选参数。')
         self.mode = W.QComboBox()
         self.mode.addItem('严格：锁定测试 + 开发集5折CV（默认）', 'cv')
         self.mode.addItem('快速：固定训练/验证/测试划分', 'fixed')
@@ -230,10 +235,10 @@ class SearchControls(W.QWidget):
             for text, widget in items:
                 form.addRow(text, widget)
             return box
-        validation = group('模型与验证', [('模型', self.family), ('跨模型比较', self.compare_all),
+        validation = group('模型与验证', [('目标建模方式', self.target_mode), ('模型', self.family), ('跨模型比较', self.compare_all),
                             ('验证方案', self.mode), ('CV 折数', self.fold_count),
                             ('实际拟合预算上限', self.max_fits), ('搜索种子', self.seed), ('CPU 线程上限', self.threads)])
-        self.max_fits.setToolTip('预算包含 XGBoost 逐目标拟合与最终重拟合；超预算会拒绝运行。')
+        self.max_fits.setToolTip('独立模式预算为所有目标的候选×折数之和，再加每个目标最终重拟合；共享模式计入XGBoost逐目标booster。超预算会拒绝运行。')
         root.addWidget(validation, 0, 0, 2, 1)
         self.model_groups = {
             'ann': group('ANN · 整体架构候选', [('架构模板（可选）', self.templates), ('学习率', self.ann_rates), ('批量大小', self.ann_batch)]),
@@ -243,18 +248,25 @@ class SearchControls(W.QWidget):
         root.addWidget(self.model_groups['ann'], 0, 1)
         root.addWidget(self.model_groups['rf'], 1, 1)
         root.addWidget(self.model_groups['xgboost'], 2, 1)
-        note = W.QLabel('候选值用逗号分隔。运行前先预览组合数与拟合预算；测试集不参与选优。')
+        note = W.QLabel('独立模式下，各目标使用此有界候选池分别选优，可得到不同模型与架构。候选值用逗号分隔；先预览总预算，测试集不参与选优。')
         note.setWordWrap(True)
         note.setProperty('role', 'muted')
         root.addWidget(note, 2, 0)
         root.setRowStretch(3, 1)
+        self.loaded_notice = W.QLabel('')
+        self.loaded_notice.setWordWrap(True)
+        self.loaded_notice.setProperty('role', 'muted')
+        self.loaded_notice.hide()
+        root.addWidget(self.loaded_notice, 3, 0, 1, 2)
+        self._restored_candidates = None
+        self._restoring = False
         root.setColumnStretch(0, 1)
         root.setColumnStretch(1, 1)
         self.family.currentIndexChanged.connect(self._refresh_model_groups)
         self.mode.currentIndexChanged.connect(self._refresh_model_groups)
         self.compare_all.toggled.connect(self._refresh_model_groups)
         self._refresh_model_groups()
-        for widget in [self.family, self.compare_all, self.mode, self.fold_count, self.max_fits,
+        for widget in [self.family, self.compare_all, self.target_mode, self.mode, self.fold_count, self.max_fits,
                        self.templates, self.ann_rates, self.ann_batch, self.rf_trees, self.rf_depth,
                        self.xgb_rounds, self.xgb_depth, self.xgb_rates, self.seed, self.threads]:
             if isinstance(widget, W.QLineEdit):
@@ -265,6 +277,59 @@ class SearchControls(W.QWidget):
                 widget.toggled.connect(self.changed)
             else:
                 widget.valueChanged.connect(self.changed)
+        # Validation settings do not alter the candidate list. Preserve the
+        # exact restored pool when changing folds, seeds or fit budgets.
+        for widget in [self.family, self.compare_all, self.templates, self.ann_rates,
+                       self.ann_batch, self.rf_trees, self.rf_depth, self.xgb_rounds,
+                       self.xgb_depth, self.xgb_rates]:
+            if isinstance(widget, W.QLineEdit):
+                widget.textChanged.connect(self.discard_restored_candidates)
+            elif isinstance(widget, W.QComboBox):
+                widget.currentIndexChanged.connect(self.discard_restored_candidates)
+            else:
+                widget.toggled.connect(self.discard_restored_candidates)
+        self.builder.changed.connect(self.discard_restored_candidates)
+
+    def discard_restored_candidates(self, *args):
+        if not self._restoring:
+            self._restored_candidates = None
+            self.loaded_notice.hide()
+
+    def restore_configuration(self, config):
+        """Restore exact saved candidates, including parameters not edited here.
+
+        The retained list is explicit and visible; any candidate-editor change
+        switches back to the displayed bounded grid, never silently mixes both.
+        """
+        self._restoring = True
+        try:
+            self.target_mode.setCurrentIndex(self.target_mode.findData(config.target_mode))
+            self.mode.setCurrentIndex(self.mode.findData(config.mode))
+            self.fold_count.setValue(config.folds)
+            self.max_fits.setValue(config.max_fits)
+            self.seed.setValue(config.seed)
+            self.threads.setValue(config.cpu_threads)
+            families = list(dict.fromkeys(spec.family for spec in config.candidates))
+            self.family.setCurrentIndex(self.family.findData(families[0]))
+            self.compare_all.setChecked(len(families) > 1)
+            def values(family, parameter, default):
+                return ','.join(str(v) for v in dict.fromkeys(spec.params.get(parameter, default)
+                                for spec in config.candidates if spec.family == family))
+            for family, parameter, default, widget in [
+                    ('ann', 'learning_rate', .001, self.ann_rates), ('ann', 'batch_size', 64, self.ann_batch),
+                    ('rf', 'n_estimators', 100, self.rf_trees), ('rf', 'max_depth', 12, self.rf_depth),
+                    ('xgboost', 'n_estimators', 150, self.xgb_rounds), ('xgboost', 'max_depth', 4, self.xgb_depth),
+                    ('xgboost', 'learning_rate', .05, self.xgb_rates)]:
+                text = values(family, parameter, default)
+                if text:
+                    widget.setText(text)
+            self.templates.clear()
+            self._restored_candidates = [ModelSpec.from_dict(asdict(spec)) for spec in config.candidates]
+            self.loaded_notice.setText(f'已恢复项目完整的 {len(config.candidates)} 个候选（含全部架构与参数）。预览/再次训练使用此清单；编辑候选网格或ANN结构/训练参数后，改用当前界面网格。')
+            self.loaded_notice.show()
+            self.loaded_notice.setToolTip(json.dumps([asdict(spec) for spec in config.candidates], ensure_ascii=False, indent=2))
+        finally:
+            self._restoring = False
 
     def _refresh_model_groups(self, *args):
         for family, group in self.model_groups.items():
@@ -278,6 +343,10 @@ class SearchControls(W.QWidget):
         return list(dict.fromkeys(result))
 
     def configuration(self, epochs, patience):
+        if self._restored_candidates is not None:
+            return SearchConfig([ModelSpec.from_dict(asdict(spec)) for spec in self._restored_candidates],
+                                self.mode.currentData(), self.fold_count.value(), self.max_fits.value(),
+                                self.seed.value(), self.threads.value(), self.target_mode.currentData())
         families = ['ann', 'rf', 'xgboost'] if self.compare_all.isChecked() else [self.family.currentData()]
         candidates = []
         if 'ann' in families:
@@ -299,4 +368,5 @@ class SearchControls(W.QWidget):
                 candidates.append(ModelSpec('xgboost', {'n_estimators': rounds, 'max_depth': depth, 'learning_rate': rate, 'patience': patience}, []))
         if len(candidates) > 100:
             raise ValueError(f'当前网格{len(candidates)}个候选，超过100上限。请缩小网格。')
-        return SearchConfig(candidates, self.mode.currentData(), self.fold_count.value(), self.max_fits.value(), self.seed.value(), self.threads.value())
+        return SearchConfig(candidates, self.mode.currentData(), self.fold_count.value(), self.max_fits.value(),
+                            self.seed.value(), self.threads.value(), self.target_mode.currentData())

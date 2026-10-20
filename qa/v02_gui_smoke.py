@@ -20,11 +20,9 @@ from PySide6 import QtCore as C, QtWidgets as W
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from daylight_workbench.core import DataConfig, prediction_column
+from daylight_workbench.core import DataConfig
 from daylight_workbench.demo import make_demo
 from daylight_workbench.external_results import ExternalMappingDialog
-from daylight_workbench.llm_filter import apply_plan, validate_plan
-from daylight_workbench.llm_dialog import NaturalLanguageFilterDialog
 from daylight_workbench.ui import MainWindow
 
 
@@ -70,6 +68,10 @@ def main():
     config = DataConfig(columns[:10], columns[10:], directions=dict(zip(columns[10:], ['max', 'min', 'min'])))
     window.set_raw(window.raw, 'SYNTHETIC IMPORT ONLY', config, config.directions)
     assert len(window.prepare().frame) == 120
+    # This archival v0.2 flow intentionally keeps the shared multi-output
+    # contract; v0.3 has a separate independent-target flow.
+    window.search_controls.target_mode.setCurrentIndex(
+        window.search_controls.target_mode.findData('shared'))
 
     window.tabs.setCurrentIndex(1)
     window.train_tabs.setCurrentIndex(0)
@@ -142,25 +144,11 @@ def main():
         time.sleep(.02)
     shots.append(shot(window, 'v02-results-1240x900.png'))
 
-    objective = prediction_column(columns[10])
-    minimum = float(frame[objective].min())
-    plan = validate_plan({'filters': [{'column': objective, 'operator': '>=', 'value': minimum}],
-                          'sort': [], 'limit': 2, 'needs_clarification': False,
-                          'explanation': 'Mocked local smoke plan.'}, frame)
-    # The dialog's transport is not invoked. Exercise the MainWindow handoff
-    # with the same reviewed, deterministic plan and retain candidate IDs.
-    original_exec = NaturalLanguageFilterDialog.exec
-    def mocked_exec(dialog):
-        dialog.plan = plan
-        dialog.result_frame = apply_plan(dialog._frame, plan)
-        return W.QDialog.DialogCode.Accepted
-    NaturalLanguageFilterDialog.exec = mocked_exec
-    try:
-        window.natural_language_filter()
-    finally:
-        NaturalLanguageFilterDialog.exec = original_exec
-    assert window.results_model.frame.candidate_id.tolist() == frame.candidate_id.tolist()[:2]
-    assert window.last_filter_plan == plan
+    # The former filter action now opens the dedicated decision page. A v0.3
+    # smoke covers reviewed local ranking and selection on that page.
+    window.natural_language_filter()
+    assert window.tabs.currentWidget() is window.decision_page
+    window.tabs.setCurrentIndex(3)
 
     project = ROOT / 'qa' / 'evidence' / 'v02-roundtrip.dwb'
     original_save = W.QFileDialog.getSaveFileName
@@ -177,7 +165,7 @@ def main():
         W.QFileDialog.getOpenFileName = original_open
     wait_idle(window, app)
     assert window.trained is not None and window.optimization is not None
-    assert window.results_model.frame.candidate_id.tolist() == frame.candidate_id.tolist()[:2]
+    assert window.results_model.frame.candidate_id.tolist() == frame.candidate_id.tolist()
 
     external_path = ROOT / 'qa' / 'evidence' / 'v02-external-objectives-only.csv'
     pd.DataFrame({'score_a': [2., 1., 3.], 'score_b': [1., 2., 3.]}).to_csv(external_path, index=False)
@@ -205,8 +193,8 @@ def main():
               'locked_test_rows': len(meta['plan']['test']),
               'development_rows': len(meta['plan']['development']),
               'screenshots': shots,
-              'steps': ['CSV import', 'group-safe CV ANN/RF/XGBoost', 'NSGA-II', 'table/plot stable-ID selection',
-                        'mocked DeepSeek plan locally applied', 'project save/reopen', 'objectives-only external CSV import']}
+              'steps': ['CSV import', 'shared group-safe CV ANN/RF/XGBoost', 'NSGA-II', 'table/plot stable-ID selection',
+                        'decision page navigation without network', 'project save/reopen', 'objectives-only external CSV import']}
     (ROOT / 'qa' / 'evidence' / 'v02-gui-smoke.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     window.close()
     app.processEvents()

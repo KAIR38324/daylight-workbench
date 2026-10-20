@@ -16,12 +16,14 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 if ($LASTEXITCODE -ne 0) { throw "Offline plot asset preparation failed" }
 & $Python -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw "Tests failed; packaging stopped" }
+& $Python -m pytest -q qa/v03_acceptance.py
+if ($LASTEXITCODE -ne 0) { throw "v0.3 independent-target and decision acceptance failed; packaging stopped" }
 & $Python scripts/smoke.py --gui
 if ($LASTEXITCODE -ne 0) { throw "GUI smoke failed; packaging stopped" }
 & $Python qa/gui_smoke.py
 if ($LASTEXITCODE -ne 0) { throw "Async GUI integration failed; packaging stopped" }
 & $Python qa/v02_gui_smoke.py
-if ($LASTEXITCODE -ne 0) { throw "v0.2 multi-model GUI integration failed; packaging stopped" }
+if ($LASTEXITCODE -ne 0) { throw "Shared v0.2 compatibility GUI integration failed; packaging stopped" }
 & $Python -m PyInstaller --noconfirm --clean --onedir --windowed --name DaylightWorkbench --icon "daylight_workbench/assets/app-icon.ico" --collect-all pymoo --collect-all torch --collect-binaries xgboost --collect-data xgboost --collect-submodules numpy --collect-submodules sklearn --hidden-import numpy._core._exceptions --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebChannel --add-data "daylight_workbench/assets;daylight_workbench/assets" --add-data "daylight_workbench/plot_assets;daylight_workbench/plot_assets" --hidden-import matplotlib.backends.backend_qtagg --add-data "demo;demo" --add-data "README.zh-CN.md;." main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller packaging failed" }
 $env:QT_QPA_PLATFORM = "offscreen"
