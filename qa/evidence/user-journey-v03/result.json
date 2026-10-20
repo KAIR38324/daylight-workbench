@@ -1,0 +1,489 @@
+{
+  "kind": "synthetic-only-real-qt-user-journey",
+  "seed": 20261020,
+  "data_file": "demo/manual-synthetic.csv",
+  "data_sha256": "836f4dfb93e5e4e2824bf88423874f343183b8bddcb950580f71d67ce5069c83",
+  "source_files": [
+    "daylight_workbench/ui.py",
+    "daylight_workbench/theme.py",
+    "daylight_workbench/modeling_widgets.py",
+    "daylight_workbench/modeling.py",
+    "daylight_workbench/project.py",
+    "daylight_workbench/decision_page.py",
+    "daylight_workbench/preference_engine.py",
+    "daylight_workbench/plot_assets/index.html",
+    "daylight_workbench/plot_assets/style.css",
+    "daylight_workbench/plot_assets/plot.js"
+  ],
+  "source_fingerprint_sha256": "dcb92d3fde174cfb26f976a264f3be937be35363d9ef1c759f86fc84f63811e6",
+  "source_commit": null,
+  "row_count": 240,
+  "input_columns": [
+    "window_ratio",
+    "glass_transmittance",
+    "room_depth_m",
+    "room_width_m",
+    "room_height_m",
+    "overhang_m",
+    "wall_reflectance",
+    "ceiling_reflectance",
+    "orientation_deg",
+    "floor_level"
+  ],
+  "targets": [
+    "synthetic_daylight_score",
+    "synthetic_glare_score",
+    "synthetic_energy_score"
+  ],
+  "directions": {
+    "synthetic_daylight_score": "max",
+    "synthetic_glare_score": "min",
+    "synthetic_energy_score": "min"
+  },
+  "split_report": {
+    "source_rows": 240,
+    "retained_rows": 240,
+    "exact_duplicates": 0,
+    "duplicates_removed": 0,
+    "independent_components": 240,
+    "split_counts": {
+      "train": 168,
+      "validation": 36,
+      "test": 36
+    },
+    "repeated_input_rows": 0,
+    "conflicting_input_rows": 0,
+    "warning": "相同自变量（即使目标不同）及同组样本始终位于同一划分；比例可能因组大小偏离。"
+  },
+  "quick_ann_epochs": {
+    "synthetic_daylight_score": 51,
+    "synthetic_glare_score": 38,
+    "synthetic_energy_score": 50
+  },
+  "quick_ann_metrics": [
+    {
+      "划分": "test",
+      "目标": "synthetic_daylight_score",
+      "R2": 0.98134462726944,
+      "MAE": 1.3753682829166836,
+      "MSE": 3.851426710080528,
+      "RMSE": 1.9625052127524472,
+      "训练均值基线MAE": 11.562589446613071,
+      "训练均值基线RMSE": 14.950152527495177
+    },
+    {
+      "划分": "test",
+      "目标": "synthetic_glare_score",
+      "R2": 0.9813915029613764,
+      "MAE": 0.73850119392154,
+      "MSE": 1.0097062973221098,
+      "RMSE": 1.0048414289439453,
+      "训练均值基线MAE": 5.719751449576529,
+      "训练均值基线RMSE": 7.779802965867047
+    },
+    {
+      "划分": "test",
+      "目标": "synthetic_energy_score",
+      "R2": 0.9871491557183433,
+      "MAE": 0.6773657793660602,
+      "MSE": 0.7906315729169612,
+      "RMSE": 0.8891746582741554,
+      "训练均值基线MAE": 6.6101421619062695,
+      "训练均值基线RMSE": 8.131074284161633
+    }
+  ],
+  "search_summary": {
+    "mode": "cv",
+    "seed": 42,
+    "candidate_count": 3,
+    "fold_count": 5,
+    "candidate_fold_jobs": 45,
+    "fit_budget": 48,
+    "test_fraction_actual": 0.15,
+    "selection_score": "independent per-target mean outer-fold RMSE / outer-training target std (constant std -> 1)"
+  },
+  "search_locked_test_rows": 36,
+  "search_development_rows": 204,
+  "candidate_models": [
+    "ann",
+    "rf",
+    "xgboost"
+  ],
+  "target_mode": "independent",
+  "per_target_winners": {
+    "synthetic_daylight_score": "ann",
+    "synthetic_glare_score": "ann",
+    "synthetic_energy_score": "ann"
+  },
+  "per_target_selected_index": {
+    "synthetic_daylight_score": 0,
+    "synthetic_glare_score": 0,
+    "synthetic_energy_score": 0
+  },
+  "heldout_metrics": [
+    {
+      "划分": "test",
+      "目标": "synthetic_daylight_score",
+      "R2": 0.9787146517290812,
+      "MAE": 1.471904552389327,
+      "MSE": 4.394388686198187,
+      "RMSE": 2.096279725179392,
+      "训练均值基线MAE": 11.562589446613071,
+      "训练均值基线RMSE": 14.950152527495177
+    },
+    {
+      "划分": "test",
+      "目标": "synthetic_glare_score",
+      "R2": 0.9785821261701141,
+      "MAE": 0.766939493552,
+      "MSE": 1.162144478213371,
+      "RMSE": 1.0780280507544184,
+      "训练均值基线MAE": 5.719751449576529,
+      "训练均值基线RMSE": 7.779802965867047
+    },
+    {
+      "划分": "test",
+      "目标": "synthetic_energy_score",
+      "R2": 0.9864477523627498,
+      "MAE": 0.7133151391698923,
+      "MSE": 0.8337845071621968,
+      "RMSE": 0.9131180138197892,
+      "训练均值基线MAE": 6.6101421619062695,
+      "训练均值基线RMSE": 8.131074284161633
+    }
+  ],
+  "optimization_evaluations": 256,
+  "optimization_candidates": 256,
+  "selected_ids_before_filter": [
+    1,
+    129,
+    256
+  ],
+  "filtered_rows": 102,
+  "exported_ids": [
+    9,
+    13
+  ],
+  "export_csv_sha256": "4413c5f4a39f68b5510cd8946aa3b435709809709eef8d3deff0926d4100ac6a",
+  "project_sha256": "ca59870f2292594d3e854b15f90f33ee57234fb2b01cae69a382dfb3b138f351",
+  "project_saved_reopened": true,
+  "project_schema_version": 3,
+  "preference_mock_queries": [
+    "帮我选更考虑采光的",
+    "我要能耗和眩光平衡的方案"
+  ],
+  "preference_first_ids": [
+    231,
+    222,
+    197,
+    235,
+    194
+  ],
+  "preference_second_ids": [
+    249,
+    217,
+    243,
+    96,
+    226
+  ],
+  "preference_first_weights": [
+    0.6,
+    0.2,
+    0.2
+  ],
+  "preference_second_weights": [
+    0.0,
+    0.5,
+    0.5
+  ],
+  "preference_mock_transport": true,
+  "external_only_targets": [
+    "score_a",
+    "score_b"
+  ],
+  "webgl_3d_executed": false,
+  "online_llm_executed": false,
+  "browser_sandbox_disabled": false,
+  "screenshots": [
+    {
+      "number": 1,
+      "file": "docs/getting-started-v03/01-import-csv.png",
+      "caption": "点击“导入 CSV / XLSX”，选择明确标注为合成的 CSV。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "d3133c1f32ed59a600a2e9c8830aec5e596b5ec0cb7eb01e0a26cfee9e755608"
+    },
+    {
+      "number": 2,
+      "file": "docs/getting-started-v03/02-assign-roles.png",
+      "caption": "前 10 列设为自变量 X，后 3 列设为目标 Y；依次选择最大、最小、最小。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "2db1e0b3614cd1fd039de301d4b6629f036ff940c1c9495f94d6f7be5c5fb506"
+    },
+    {
+      "number": 3,
+      "file": "docs/getting-started-v03/03-validate-split.png",
+      "caption": "点击“校验数据与划分”，确认有效行数与训练、验证、测试拆分。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "133b01d341a688036574651a71274b3e44bdf16496e509dc91ebbefd5a012be4"
+    },
+    {
+      "number": 4,
+      "file": "docs/getting-started-v03/04-ann-settings.png",
+      "caption": "保持默认逐目标独立模式；在 ANN 结构与参数中设两层 64 ReLU、32 Tanh；最多 180 轮、耐心 24、学习率 0.003、批量 32。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "a0969596155352e2f28838b804db6e3706319714c33d81b298c6936c61521180"
+    },
+    {
+      "number": 5,
+      "file": "docs/getting-started-v03/05-ann-live-loss.png",
+      "caption": "点击“单次 ANN（快速）”；训练中查看实时轮次与真实训练、验证损失。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "d4536456103f73e6a427d18ada621d7ebeae926d8dfec81f393a6f999979e4b6",
+      "epoch": 18,
+      "worker_active": true,
+      "plotted_through_epoch": 18
+    },
+    {
+      "number": 6,
+      "file": "docs/getting-started-v03/06-ann-test-metrics.png",
+      "caption": "训练完成后，在“指标 / 实时曲线”查看三个独立 ANN 的逐目标测试误差；目标选择框切换对应模型记录。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "518f56377fdf134595b7b9fbeab0689f711554eab0ddaa374bb47f0cadc24cbc"
+    },
+    {
+      "number": 7,
+      "file": "docs/getting-started-v03/07-cv-grid-settings.png",
+      "caption": "确认默认“逐目标独立建模”，勾选跨模型比较，保留严格模式 5 折 CV，设置有上限的 ANN、RF、XGBoost 候选。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "ca78cd33b4eda35960031c93357e443cde379f9d9de85a703240d6f36442d3f3"
+    },
+    {
+      "number": 8,
+      "file": "docs/getting-started-v03/08-cv-budget-preview.png",
+      "caption": "点击“预览候选与拟合预算”；确认 3 目标 × 3 候选 × 5 折 + 3 次重拟合、预算和锁定测试行数后启动。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "d1a9bc6654b57f7d64f05f3af1eeff885173d55674ff3422d6025265c13dbf42"
+    },
+    {
+      "number": 9,
+      "file": "docs/getting-started-v03/09-cv-model-selection.png",
+      "caption": "在“指标 / 实时曲线”查看各目标分别验证选优的候选排名，及最终独立测试集逐目标指标。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "256b5afe2247d9df36ab752cf5ca1694546d72560ec72d1140aebf584a7bafda"
+    },
+    {
+      "number": 10,
+      "file": "docs/getting-started-v03/10-opt-bounds.png",
+      "caption": "检查 10 个变量的训练观测范围与搜索边界；将 floor_level 明确设为整数，并设置 NSGA-II 种群 32、代数 8。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "cd3ef70d4d563e4fd8d5e5f773c8dcd9264b110380324eb9494a623d47bfd6e4"
+    },
+    {
+      "number": 11,
+      "file": "docs/getting-started-v03/11-nsga-live.png",
+      "caption": "点击“运行 NSGA-II（仅代理预测）”，查看实时代数、评估次数及预测前沿。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "a4088ddb7a77c7f459532d4fe3f547f353b2dce6ad404f54870d1d300a96a451",
+      "generation": 8,
+      "worker_active": true
+    },
+    {
+      "number": 12,
+      "file": "docs/getting-started-v03/12-nsga-complete.png",
+      "caption": "任务完成后核对实际评估数；优化候选仍只是代理模型预测。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "b36c3220c99268ae0ee5fa6c4fe35dbb8e703931b4a45ada4588168567dfff06"
+    },
+    {
+      "number": 13,
+      "file": "docs/getting-started-v03/13-results-all.png",
+      "caption": "切到“结果分析与导出”，选择“全部候选”，查看二维目标空间与 13 轴平行坐标。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "46bf9666fc6742a2eaac3575ca28aaa240ec1902a3eb4318c7b99f6d72665080"
+    },
+    {
+      "number": 14,
+      "file": "docs/getting-started-v03/14-linked-selection.png",
+      "caption": "显示表格，在图中选 3 个稳定候选 ID；表格排序后选择仍与图同步。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "c9b08284919b676390f470ba09e70a86a3ab12a4608509d68db56a4a65cd441a",
+      "selected_ids": [
+        1,
+        129,
+        256
+      ]
+    },
+    {
+      "number": 15,
+      "file": "docs/getting-started-v03/15-objective-matrix.png",
+      "caption": "切换目标两两散点矩阵，检查已选方案的关联高亮。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "0d5f41aabb543d8d81d935e89b23fb35d02ea3fca5352978f2fc3a3e302425e0"
+    },
+    {
+      "number": 16,
+      "file": "docs/getting-started-v03/16-objective-distribution.png",
+      "caption": "切换各目标分布，查看已选方案所处位置。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "358384141f9a84602f6db7263dba87c5b3e1d90a36420b23d6de4326c516a47c"
+    },
+    {
+      "number": 17,
+      "file": "docs/getting-started-v03/17-selected-comparison.png",
+      "caption": "切换已选方案比较，以原始单位对照三项目标。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "f5531d988f62d3d7be3f72847134f4ee7abe35c25729b089eb05ca3a7cc942b4"
+    },
+    {
+      "number": 18,
+      "file": "docs/getting-started-v03/18-input-target-correlation.png",
+      "caption": "切换输入与目标相关性热图；只作相关描述，不推断因果。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "8c455e7cce97b6035173044929b9a7784bfd25ed3e793e8de334b90c4a10ea95"
+    },
+    {
+      "number": 19,
+      "file": "docs/getting-started-v03/19-manual-filter-settings.png",
+      "caption": "展开“区间筛选”，在预测采光分数下限输入演示阈值；留空的边界不限制。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "733f324f011d815ab3cfe9964e209228cdd58fb0003d84b5af93749e6b39f158",
+      "column": "predicted::synthetic_daylight_score",
+      "lower_bound": 41.926770664394894
+    },
+    {
+      "number": 20,
+      "file": "docs/getting-started-v03/20-manual-filter-result.png",
+      "caption": "点击“应用筛选”，确认当前行数减少且数值与 Pareto 原标记未被改写。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "b3638d28d11c4f91e9b5cb37a461b01b0cc1bc349f619ca7bc0da0a5a4b52ca5"
+    },
+    {
+      "number": 21,
+      "file": "docs/getting-started-v03/21-export-selected.png",
+      "caption": "点击“导出已选方案”，生成 CSV 与来源 JSON；按候选 ID 和各数值列逐项核对导出。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "ea087456afe18a002a864488e444d518f5086af2f463bbd6f5915c2ef7add832",
+      "exported_ids": [
+        9,
+        13
+      ]
+    },
+    {
+      "number": 22,
+      "file": "docs/getting-started-v03/22-project-saved.png",
+      "caption": "点击顶端“保存项目”，将模型、划分和优化结果保存为 .dwb；项目文件未加密。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "441921b8f086f8f2c7c6f07668d370599117944ef38af777149de2ec1f6b5ae4"
+    },
+    {
+      "number": 23,
+      "file": "docs/getting-started-v03/23-project-reopened.png",
+      "caption": "重开 .dwb 后核对模型、102 行筛选结果与已选 ID；二维散点和图表计数恢复 2 个高亮。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "89f7e0d3984c1fffe67a6ddbb397dfe4cbac069a08bbd794e5441400639549b9"
+    },
+    {
+      "number": 24,
+      "file": "docs/getting-started-v03/24-decision-confirm-mapping.png",
+      "caption": "进入第五页，按合成数据定义确认采光最大化、眩光和能耗最小化，并手动确认中文别名与未知单位。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "dbe7579e30f6cca51b21f3abc9bbf4b5a4cdebac15c5f58de0f433fe1d618c0f"
+    },
+    {
+      "number": 25,
+      "file": "docs/getting-started-v03/25-daylight-outbound-preview.png",
+      "caption": "输入“帮我选更考虑采光的”，点击“预览发送内容”；本次只检查传出正文，不使用真实密钥。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "3580fb95149372786f51caf97b8321705ed1b2d2a8767317752ec18edbee7943"
+    },
+    {
+      "number": 26,
+      "file": "docs/getting-started-v03/26-daylight-mock-proposal.png",
+      "caption": "本地模拟结构化响应：审核采光 60%、眩光 20%、能耗 20%；此时尚未应用，未联网。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "4a0e5ba952bad16f0fab412515aa8754067f532405c2d3810dbb06be5709c967"
+    },
+    {
+      "number": 27,
+      "file": "docs/getting-started-v03/27-daylight-applied.png",
+      "caption": "点击“应用审核后的偏好并联动选择”后，本地计算排名；核对候选 ID、损失和原始三目标值。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "334813572177b99d87af485effbd1c341a733abc027b01a26f6f8245ec5e7007"
+    },
+    {
+      "number": 28,
+      "file": "docs/getting-started-v03/28-decision-linked-plots.png",
+      "caption": "在第五页“交互图表”查看完整候选二维散点与平行坐标；推荐 ID 与结果页联动。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "5b1a9c2937319fcc1d71505ef85e368f7316fc0321f28a6e92dd441c7b0e6877"
+    },
+    {
+      "number": 29,
+      "file": "docs/getting-started-v03/29-balance-outbound-preview.png",
+      "caption": "第二轮输入“我要能耗和眩光平衡的方案”，重新预览；上下文含前轮权重，不含候选明细行。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "fcdea0f4de0ac7ae2fda933e5f830280d8ba94f0af6f4e0fe62a82032ad40a3e"
+    },
+    {
+      "number": 30,
+      "file": "docs/getting-started-v03/30-balance-mock-proposal.png",
+      "caption": "本地模拟第二轮结构化响应：能耗和眩光各 50%，采光 0%；旧排名未暗中改变。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "688b162786be3e6396b40a1773fa4c24614c5106bf14849f160462f2334c476a"
+    },
+    {
+      "number": 31,
+      "file": "docs/getting-started-v03/31-balance-applied.png",
+      "caption": "显式应用第二轮建议，查看本地重新计算的权衡、推荐 ID 与稳定联动；不把权重结果称为物理最优。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "c5630178fa2a9e7ae38c14f096f0ec1eac8cc1cc2ed174299bef07dffff45c08"
+    },
+    {
+      "number": 32,
+      "file": "docs/getting-started-v03/32-external-mapping.png",
+      "caption": "点击“导入外部结果”，将仅有的两列数值映射为最小化目标，不虚构输入。",
+      "width": 780,
+      "height": 520,
+      "sha256": "5c8eaa5b9ee8f43b6227f4a866cea2e4063f3676a7e101e5961338b31469b955"
+    },
+    {
+      "number": 33,
+      "file": "docs/getting-started-v03/33-external-results.png",
+      "caption": "导入后显示外部数值结果；保留源行 ID 和原目标列名，不标称代理预测或物理验证。",
+      "width": 1440,
+      "height": 1000,
+      "sha256": "1311baad65a3bd1aa3b704d1d1d8c379a29e1723fac2fcd5eaa35b59b4cc7091"
+    }
+  ]
+}

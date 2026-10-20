@@ -61,7 +61,7 @@ python -m daylight_workbench --self-test
 
 离屏测试不是目标设备上的人工 GUI 验收。Windows x64 用 `powershell -ExecutionPolicy Bypass -File .\build.ps1` 构建；脚本会准备本地 Plotly JS、运行测试、打包并启动 EXE 自检。需分发完整的 `dist/DaylightWorkbench/` 文件夹，不能只复制 EXE。若 Windows 提示未知发布者，应按所在组织的安全策略审核，不应绕过系统安全警告。
 
-旧版图文说明：[v0.2 入门指南](docs/建筑采光多目标优化平台%20入门指南.docx)。v0.3 完整流程说明将在最新手册同步完成后提供。
+入门指南：[v0.3 完整流程与 33 步截图](docs/建筑采光多目标优化平台%20入门指南%20v0.3.docx)；[v0.2 旧版](docs/建筑采光多目标优化平台%20入门指南.docx)。
 
 ## 数据和实现限制
 
