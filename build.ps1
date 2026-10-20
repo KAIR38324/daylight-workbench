@@ -21,7 +21,16 @@ if ($LASTEXITCODE -ne 0) { throw "Async GUI integration failed; packaging stoppe
 & $Python -m PyInstaller --noconfirm --clean --onedir --windowed --name DaylightWorkbench --collect-all pymoo --collect-all torch --collect-submodules sklearn --hidden-import matplotlib.backends.backend_qtagg --add-data "demo;demo" --add-data "README.zh-CN.md;." main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller packaging failed" }
 $env:QT_QPA_PLATFORM = "offscreen"
+$Report = Join-Path $env:TEMP "daylight-workbench-selftest.json"
+if (Test-Path $Report) { Remove-Item $Report }
 $Process = Start-Process -FilePath "dist\DaylightWorkbench\DaylightWorkbench.exe" -ArgumentList "--self-test" -Wait -PassThru
+if (Test-Path $Report) {
+    New-Item -ItemType Directory -Force "qa\evidence" | Out-Null
+    Copy-Item $Report "qa\evidence\packaged-selftest.json"
+    Get-Content -Raw -Encoding UTF8 $Report | Write-Host
+} else {
+    Write-Host "Packaged executable did not write a self-test report."
+}
 if ($Process.ExitCode -ne 0) { throw "Packaged EXE self-test failed: $($Process.ExitCode)" }
 Write-Host "Built dist\DaylightWorkbench\DaylightWorkbench.exe. Distribute the ENTIRE folder, not the exe alone."
 Write-Host "Manual Windows acceptance is still required: import -> train -> optimize -> filter -> export -> save/reopen -> cancel."

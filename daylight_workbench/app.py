@@ -1,11 +1,16 @@
 def main():
-    import sys
+    import sys, os
+    # Windowed PyInstaller apps have no console streams. Libraries may still
+    # write diagnostics; provide valid sinks rather than None.
+    for name in ('stdout', 'stderr'):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, 'w', encoding='utf-8'))
     if '--self-test' in sys.argv:
-        from .smoke import main as smoke_main
         import json, tempfile, traceback
         from pathlib import Path
         report = Path(tempfile.gettempdir()) / 'daylight-workbench-selftest.json'
         try:
+            from .smoke import main as smoke_main
             smoke_main(['--gui'])
             report.write_text(json.dumps({'status': 'passed', 'scope': 'synthetic ANN/NSGA/project/export/offscreen Qt'}, indent=2), encoding='utf-8')
         except Exception:
