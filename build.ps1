@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) { throw "GUI smoke failed; packaging stopped" }
 if ($LASTEXITCODE -ne 0) { throw "Async GUI integration failed; packaging stopped" }
 & $Python qa/v02_gui_smoke.py
 if ($LASTEXITCODE -ne 0) { throw "v0.2 multi-model GUI integration failed; packaging stopped" }
-& $Python -m PyInstaller --noconfirm --clean --onedir --windowed --name DaylightWorkbench --collect-all pymoo --collect-all torch --collect-all xgboost --collect-submodules numpy --collect-submodules sklearn --hidden-import numpy._core._exceptions --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebChannel --add-data "daylight_workbench/plot_assets;daylight_workbench/plot_assets" --hidden-import matplotlib.backends.backend_qtagg --add-data "demo;demo" --add-data "README.zh-CN.md;." main.py
+& $Python -m PyInstaller --noconfirm --clean --onedir --windowed --name DaylightWorkbench --collect-all pymoo --collect-all torch --collect-binaries xgboost --collect-data xgboost --collect-submodules numpy --collect-submodules sklearn --hidden-import numpy._core._exceptions --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebChannel --add-data "daylight_workbench/plot_assets;daylight_workbench/plot_assets" --hidden-import matplotlib.backends.backend_qtagg --add-data "demo;demo" --add-data "README.zh-CN.md;." main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller packaging failed" }
 $env:QT_QPA_PLATFORM = "offscreen"
 $Report = Join-Path $env:TEMP "daylight-workbench-selftest.json"
