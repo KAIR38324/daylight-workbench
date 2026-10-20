@@ -8,3 +8,7 @@ dist/
 *.dwb
 *.provenance.json
 qa/*.png
+
+qa/evidence/
+
+daylight_workbench/plot_assets/plotly.min.js

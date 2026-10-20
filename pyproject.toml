@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daylight-workbench"
-version = "0.1.0"
-description = "Offline ANN surrogate modeling and NSGA-II desktop workbench"
+version = "0.2.0"
+description = "Offline multi-model surrogate optimization desktop workbench with opt-in DeepSeek filtering"
 requires-python = ">=3.12,<3.13"
 dynamic = ["dependencies"]
 

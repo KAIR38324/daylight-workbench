@@ -10,6 +10,7 @@ import json
 import math
 import random
 import threading
+import time
 
 import numpy as np
 import pandas as pd
@@ -228,10 +229,13 @@ class TrainConfig:
     learning_rate: float = 0.001
     batch_size: int = 64
     seed: int = 42
+    activations: list[str] = field(default_factory=list)
 
     def validate(self, n_inputs=1, n_outputs=1):
         if not 1 <= len(self.hidden) <= 8 or any(type(n) is not int or not 1 <= n <= 2048 for n in self.hidden):
             raise ValueError('隐藏层需要1-8层，每层1-2048个神经元。')
+        if self.activations and (len(self.activations) != len(self.hidden) or any(a not in ('relu','tanh','sigmoid','gelu','leaky_relu') for a in self.activations)):
+            raise ValueError('每层激活函数必须与隐藏层逐项对应。')
         sizes = [n_inputs] + self.hidden + [n_outputs]
         if sum((a + 1) * b for a, b in zip(sizes, sizes[1:])) > 5_000_000:
             raise ValueError('P0 模型参数上限为500万。')
@@ -278,7 +282,8 @@ def make_model(n_inputs, n_outputs, config):
     for i, (a, b) in enumerate(zip(sizes, sizes[1:])):
         layers.append(torch.nn.Linear(a, b))
         if i < len(sizes) - 2:
-            layers.append(torch.nn.ReLU())
+            activation = config.activations[i] if config.activations else 'relu'
+            layers.append({'relu': torch.nn.ReLU, 'tanh': torch.nn.Tanh, 'sigmoid': torch.nn.Sigmoid, 'gelu': torch.nn.GELU, 'leaky_relu': torch.nn.LeakyReLU}[activation]())
     return torch.nn.Sequential(*layers)
 
 
@@ -307,7 +312,7 @@ class TrainedModel:
         return result
 
 
-def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: Callable | None = None) -> TrainedModel:
+def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: Callable | None = None, snapshot=None) -> TrainedModel:
     import torch
     config.validate(len(data.config.inputs), len(data.config.targets))
     validate_splits(data)
@@ -317,10 +322,17 @@ def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: 
     torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
     torch.use_deterministic_algorithms(True)
     tr, va = data.splits['train'], data.splits['validation']
-    xs, ys = Scale.fit(data.X[tr]), Scale.fit(data.Y[tr])
-    X = torch.tensor(xs.transform(data.X), dtype=torch.float32)
-    Y = torch.tensor(ys.transform(data.Y), dtype=torch.float32)
-    if not torch.isfinite(X).all() or not torch.isfinite(Y).all():
+    # The held-out test labels are evaluated only after training; even a finite
+    # label outside float32 range must not affect fitting or early stopping.
+    train_frame, validation_frame = data.frame.iloc[tr], data.frame.iloc[va]
+    train_x = train_frame[data.config.inputs].to_numpy(dtype=np.float64)
+    train_y = train_frame[data.config.targets].to_numpy(dtype=np.float64)
+    xs, ys = Scale.fit(train_x), Scale.fit(train_y)
+    X = torch.tensor(xs.transform(train_x), dtype=torch.float32)
+    Y = torch.tensor(ys.transform(train_y), dtype=torch.float32)
+    X_val = torch.tensor(xs.transform(validation_frame[data.config.inputs].to_numpy(dtype=np.float64)), dtype=torch.float32)
+    Y_val = torch.tensor(ys.transform(validation_frame[data.config.targets].to_numpy(dtype=np.float64)), dtype=torch.float32)
+    if not all(torch.isfinite(values).all() for values in (X, Y, X_val, Y_val)):
         raise ValueError('缩放后数值超出float32范围，请检查数据量级。')
     model = make_model(X.shape[1], Y.shape[1], config)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
@@ -330,7 +342,7 @@ def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: 
     for epoch in range(1, config.epochs + 1):
         check_cancel(cancel)
         model.train()
-        order = rng.permutation(tr)
+        order = rng.permutation(len(tr))
         train_sum = 0.0
         for start in range(0, len(order), config.batch_size):
             check_cancel(cancel)
@@ -344,7 +356,7 @@ def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: 
             train_sum += float(loss.item()) * len(batch)
         model.eval()
         with torch.no_grad():
-            val_loss = float(loss_fn(model(X[va]), Y[va]).item())
+            val_loss = float(loss_fn(model(X_val), Y_val).item())
         if not math.isfinite(val_loss):
             raise ValueError('验证损失非有限值。')
         history.append({'epoch': epoch, 'train_loss': train_sum / len(tr), 'validation_loss': val_loss})
@@ -353,6 +365,8 @@ def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: 
             best_weights = {k: v.detach().clone() for k, v in model.state_dict().items()}
         else:
             stale += 1
+        if snapshot and (epoch == 1 or epoch % 5 == 0 or stale >= config.patience or epoch == config.epochs):
+            snapshot({'kind':'loss', 'family':'ann', 'epoch':epoch, 'best_epoch':best_epoch, 'early_stopped':stale >= config.patience, 'history':list(history), 'label':'快速固定划分ANN'})
         if progress and (epoch == 1 or epoch % 5 == 0):
             progress(f'训练 {epoch}/{config.epochs}，验证损失 {val_loss:.5g}，最佳轮次 {best_epoch}')
         if stale >= config.patience:
@@ -364,6 +378,7 @@ def train_model(data: PreparedData, config: TrainConfig, cancel=None, progress: 
         actual, predicted = data.Y[indices], trained.predict(data.X[indices])
         trained.metrics[name] = {
             target: {'R2': float(r2_score(actual[:, j], predicted[:, j], force_finite=False)) if np.ptp(actual[:, j]) > 0 else None,
+                     'MSE': float(mean_squared_error(actual[:, j], predicted[:, j])),
                      'MAE': float(mean_absolute_error(actual[:, j], predicted[:, j])),
                      'RMSE': float(math.sqrt(mean_squared_error(actual[:, j], predicted[:, j])))}
             for j, target in enumerate(data.config.targets)
@@ -403,7 +418,8 @@ class OptimizeConfig:
             raise ValueError('P0 单次评估预算上限20000。')
         if type(self.seed) is not int or not 0 <= self.seed <= 2**32 - 1:
             raise ValueError('随机种子超出范围。')
-        X = trained.data.X[trained.data.splits['train']]
+        fit_indices = getattr(trained, 'fit_indices', trained.data.splits['train'])
+        X = trained.data.X[fit_indices]
         for j, v in enumerate(self.variables):
             if v.kind not in ('continuous', 'integer') or not np.isfinite([v.lower, v.upper]).all() or v.lower > v.upper:
                 raise ValueError(f'{v.name} 的类型或上下界无效。')
@@ -426,7 +442,7 @@ def prediction_column(name: str) -> str:
     return f'predicted::{name}'
 
 
-def optimize_model(trained: TrainedModel, config: OptimizeConfig, cancel=None, progress=None) -> OptimizationResult:
+def optimize_model(trained: TrainedModel, config: OptimizeConfig, cancel=None, progress=None, snapshot=None) -> OptimizationResult:
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.core.callback import Callback
     from pymoo.core.problem import Problem
@@ -438,6 +454,7 @@ def optimize_model(trained: TrainedModel, config: OptimizeConfig, cancel=None, p
     active = [j for j, v in enumerate(config.variables) if v.lower < v.upper and not v.fixed]
     records_x, records_y, records_g = [], [], []
     generation = [1]
+    last_snapshot = [0.]
 
     def evaluate(decisions):
         check_cancel(cancel)
@@ -470,6 +487,12 @@ def optimize_model(trained: TrainedModel, config: OptimizeConfig, cancel=None, p
             def notify(self, algorithm):
                 check_cancel(cancel)
                 generation[0] = int(algorithm.n_gen) + 1
+                if snapshot and (time.monotonic() - last_snapshot[0] > .15 or algorithm.n_gen == config.generations):
+                    last_snapshot[0] = time.monotonic()
+                    active_x = algorithm.pop.get('X')
+                    full_x = np.tile([v.lower for v in config.variables], (len(active_x), 1)).astype(float)
+                    full_x[:, active] = active_x
+                    snapshot({'kind': 'optimization', 'generation': int(algorithm.n_gen), 'generations': config.generations, 'evaluations': int(algorithm.evaluator.n_eval), 'X': full_x.tolist(), 'Y': (algorithm.pop.get('F') * signs).tolist(), 'directions': config.directions, 'inputs': trained.data.config.inputs, 'targets': targets, 'pareto_Y': (algorithm.opt.get('F') * signs).tolist()})
                 if progress:
                     progress(f'NSGA-II {algorithm.n_gen}/{config.generations}代，已评估 {algorithm.evaluator.n_eval} 个候选')
         minimize(SurrogateProblem(), NSGA2(pop_size=config.population, repair=IntegerRepair()), ('n_gen', config.generations), seed=config.seed, callback=Monitor(), verbose=False)
@@ -527,11 +550,17 @@ def export_candidates(path: str | Path, frame: pd.DataFrame, trained: TrainedMod
     safe = frame.copy()
     safe.columns = [('\'' + str(c)) if str(c).startswith(('=', '+', '-', '@', '\t', '\r')) else str(c) for c in safe.columns]
     safe.to_csv(path, index=False, encoding='utf-8-sig', float_format='%.17g')
-    provenance = {'schema_version': 1, 'app': 'Daylight Workbench 0.1.0',
+    provenance = {'schema_version': 1, 'app': 'Daylight Workbench ' + ('0.2.0' if hasattr(trained, 'spec') else '0.1.0'),
                   'notice': '代理模型预测候选，不是经 Radiance / EnergyPlus 验证的物理仿真结果。',
                   'dataset_sha256': trained.data.fingerprint, 'data_config': asdict(trained.data.config),
                   'training_config': asdict(trained.config), 'best_epoch': trained.best_epoch,
                   'test_metrics': trained.metrics['test'], 'optimization_config': asdict(optimization.config),
                   'exported_rows': len(frame), 'evaluations': optimization.evaluations,
                   'csv_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    if hasattr(trained, 'spec'):
+        provenance['model_spec'] = asdict(trained.spec)
+        provenance['model_family'] = trained.family
+        provenance['actual_fit_indices'] = trained.fit_indices
+        provenance['actual_training_support'] = trained.support_bounds
+        provenance['search'] = trained.search_metadata
     path.with_suffix(path.suffix + '.provenance.json').write_text(json.dumps(provenance, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')

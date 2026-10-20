@@ -12,13 +12,17 @@ if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 if ($LASTEXITCODE -ne 0) { throw "CPU PyTorch installation failed" }
 & $Python -m pip install -r requirements-dev.txt
 if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+& $Python -m daylight_workbench.interactive_plot --prepare-assets
+if ($LASTEXITCODE -ne 0) { throw "Offline plot asset preparation failed" }
 & $Python -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw "Tests failed; packaging stopped" }
 & $Python scripts/smoke.py --gui
 if ($LASTEXITCODE -ne 0) { throw "GUI smoke failed; packaging stopped" }
 & $Python qa/gui_smoke.py
 if ($LASTEXITCODE -ne 0) { throw "Async GUI integration failed; packaging stopped" }
-& $Python -m PyInstaller --noconfirm --clean --onedir --windowed --name DaylightWorkbench --collect-all pymoo --collect-all torch --collect-submodules sklearn --hidden-import matplotlib.backends.backend_qtagg --add-data "demo;demo" --add-data "README.zh-CN.md;." main.py
+& $Python qa/v02_gui_smoke.py
+if ($LASTEXITCODE -ne 0) { throw "v0.2 multi-model GUI integration failed; packaging stopped" }
+& $Python -m PyInstaller --noconfirm --clean --onedir --windowed --name DaylightWorkbench --collect-all pymoo --collect-all torch --collect-all xgboost --collect-submodules numpy --collect-submodules sklearn --hidden-import numpy._core._exceptions --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebChannel --add-data "daylight_workbench/plot_assets;daylight_workbench/plot_assets" --hidden-import matplotlib.backends.backend_qtagg --add-data "demo;demo" --add-data "README.zh-CN.md;." main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller packaging failed" }
 $env:QT_QPA_PLATFORM = "offscreen"
 $Report = Join-Path $env:TEMP "daylight-workbench-selftest.json"
