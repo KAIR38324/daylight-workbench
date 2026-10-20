@@ -220,6 +220,62 @@ def _source_fingerprint(frame, columns):
     return hashlib.sha256(hashes).hexdigest()
 
 
+def _finite_quantiles(values: np.ndarray) -> tuple[float, float]:
+    """Keep ordinary NumPy interpolation, without overflowing extreme spans."""
+    if math.isfinite(float(values.max()) - float(values.min())):
+        # Subnormal interpolation may legitimately round to zero.
+        with np.errstate(under="ignore"):
+            return tuple(float(v) for v in np.quantile(values, [.05, .95]))
+    ordered = np.sort(values)
+    result = []
+    for q in (.05, .95):
+        position = (len(ordered) - 1) * q
+        index = int(position)
+        fraction = position - index
+        low, high = float(ordered[index]), float(ordered[min(index + 1, len(ordered) - 1)])
+        span = high - low
+        if math.isfinite(span):
+            value = low + span * fraction if fraction < .5 else high - span * (1 - fraction)
+        else:
+            # An overflowing difference requires opposite signs. Their weighted
+            # sum is finite, unlike subtracting the endpoints before weighting.
+            value = (1 - fraction) * low + fraction * high
+        result.append(value)
+    return tuple(result)
+
+
+def normalized_objective_loss(values: np.ndarray, bounds: tuple[float, float] | None,
+                              direction: str) -> np.ndarray:
+    """Direction-aware fixed-reference loss using portable float64 arithmetic.
+
+    Clip before subtracting so outliers cannot overflow a narrow fixed range.
+    Only rescale when the span itself overflows; ordinary and adjacent finite
+    bounds retain the precision of direct subtraction. This also works on
+    Windows, where longdouble has no wider exponent range than float64.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    loss = np.full(values.shape, np.nan, dtype=np.float64)
+    finite = np.isfinite(values)
+    if bounds is None:
+        return loss
+    lo, hi = map(float, bounds)
+    if hi == lo:
+        loss[finite] = 0.0
+        return loss
+    clipped = np.clip(values[finite], lo, hi)
+    span = hi - lo
+    # Ratios smaller than float64 can represent correctly round to zero.
+    with np.errstate(under="ignore"):
+        if math.isfinite(span):
+            fractions = (clipped - lo) / span
+        else:
+            scale = max(abs(lo), abs(hi))
+            fractions = (clipped / scale - lo / scale) / (hi / scale - lo / scale)
+    normalized = np.clip(fractions, 0.0, 1.0)
+    loss[finite] = 1 - normalized if direction == "max" else normalized
+    return loss
+
+
 def make_normalization_reference(frame: pd.DataFrame, objectives: Iterable[ObjectiveSpec | dict]) -> NormalizationReference:
     if "candidate_id" not in frame or frame.columns.has_duplicates:
         raise PlanError("候选数据需要唯一列和稳定候选标识。")
@@ -233,7 +289,7 @@ def make_normalization_reference(frame: pd.DataFrame, objectives: Iterable[Objec
         values = pd.to_numeric(frame[col], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
         finite = values[np.isfinite(values)]
         bounds[col] = {"fixed_minmax": (float(finite.min()), float(finite.max())) if finite.size else None,
-                       "fixed_robust": tuple(float(v) for v in np.quantile(finite, [.05, .95])) if finite.size else None}
+                       "fixed_robust": _finite_quantiles(finite) if finite.size else None}
     relevant = ["candidate_id", *[c["name"] for c in preview["columns"]]]
     return NormalizationReference(keys, bounds, _source_fingerprint(frame, relevant))
 
@@ -306,22 +362,11 @@ def rank_candidates(frame: pd.DataFrame, plan: dict, objectives: Iterable[Object
     for spec in preview["objectives"]:
         col = spec["column"]
         values = pd.to_numeric(frame[col], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
-        finite = np.isfinite(values)
         bounds = reference.bounds[col][plan["normalization"]]
         used_bounds[col] = bounds
-        loss = np.full(len(frame), np.nan)
-        if bounds is not None:
-            lo, hi = bounds
-            if hi == lo:
-                loss[finite] = 0.0
-                constants.append(col)
-            else:
-                # Divide after offset using longdouble to avoid overflow on extreme
-                # but finite source units. The score itself stays finite in [0,1].
-                fractions = ((values[finite].astype(np.longdouble) - np.longdouble(lo)) /
-                             (np.longdouble(hi) - np.longdouble(lo)))
-                normalized = np.asarray(np.clip(fractions, 0, 1), dtype=float)
-                loss[finite] = 1 - normalized if spec["direction"] == "max" else normalized
+        loss = normalized_objective_loss(values, bounds, spec["direction"])
+        if bounds is not None and bounds[0] == bounds[1]:
+            constants.append(col)
         losses[col] = loss
         if weights[col] > 0:
             finite_active &= np.isfinite(loss)

@@ -9,7 +9,7 @@ import pytest
 from daylight_workbench.llm_filter import PlanError, RequestError, RequestSettings
 from daylight_workbench.preference_engine import (
     ObjectiveSpec, build_preference_preview, default_preference_plan,
-    make_normalization_reference, preference_request_body, rank_candidates,
+    make_normalization_reference, normalized_objective_loss, preference_request_body, rank_candidates,
     request_preference_plan, validate_preference_plan,
 )
 
@@ -225,3 +225,56 @@ def test_all_constant_and_extreme_finite_units_do_not_generate_nan_scores(candid
     huge = rank_candidates(f, p, objectives)
     assert np.isfinite(huge.metrics.preference_score).all()
     assert huge.frame.candidate_id.iloc[0] == "A"
+
+
+@pytest.mark.parametrize("direction", ["min", "max"])
+def test_extreme_float64_scores_are_exact_and_direction_aware(direction, monkeypatch):
+    # Emulate the Windows longdouble range even when this runs on Linux.
+    monkeypatch.setattr(np, "longdouble", np.float64)
+    frame = pd.DataFrame({"candidate_id": ["A", "B", "C", "D"],
+                          "value": np.array([-1e308, 0., 1e307, 1e308], dtype=np.float64)})
+    objectives = [ObjectiveSpec("value", "Value", direction)]
+    plan = default_preference_plan(objectives, scope="all")
+    previous = np.seterr(all="raise")
+    try:
+        result = rank_candidates(frame, plan, objectives)
+    finally:
+        np.seterr(**previous)
+    expected = np.array([0., .5, .55, 1.])
+    if direction == "max":
+        expected = 1 - expected
+    by_id = result.metrics.set_index("candidate_id").loc[frame.candidate_id]
+    np.testing.assert_array_equal(by_id.preference_score, expected)
+    assert result.frame.candidate_id.tolist() == (["A", "B", "C", "D"] if direction == "min" else ["D", "C", "B", "A"])
+    assert result.excluded_nonfinite == 0
+
+
+@pytest.mark.parametrize("bounds,values,expected", [
+    ((1e308, np.nextafter(1e308, np.inf)), [-1e308, 1e308, np.nextafter(1e308, np.inf), 1.7e308], [0., 0., 1., 1.]),
+    ((-1e308, 1e308), [-1.7e308, -1e308, 0., 1e307, 1e308, 1.7e308], [0., 0., .5, .55, 1., 1.]),
+    ((0., 1e308), [0., np.finfo(float).tiny, 1e308], [0., 0., 1.]),
+    ((0., np.nextafter(0., 1.)), [0., np.nextafter(0., 1.)], [0., 1.]),
+])
+def test_float64_normalization_clips_and_preserves_adjacent_ranges(bounds, values, expected):
+    previous = np.seterr(all="raise")
+    try:
+        loss = normalized_objective_loss(np.asarray(values, dtype=np.float64), bounds, "min")
+    finally:
+        np.seterr(**previous)
+    assert loss.dtype == np.float64
+    np.testing.assert_array_equal(loss, expected)
+
+
+def test_opposite_extreme_robust_endpoints_are_finite_under_strict_errors():
+    frame = pd.DataFrame({"candidate_id": ["A", "B"], "value": [-1e308, 1e308]})
+    objectives = [ObjectiveSpec("value", "Value", "min")]
+    plan = default_preference_plan(objectives, scope="all")
+    plan["normalization"] = "fixed_robust"
+    previous = np.seterr(all="raise")
+    try:
+        reference = make_normalization_reference(frame, objectives)
+        result = rank_candidates(frame, plan, objectives, reference)
+    finally:
+        np.seterr(**previous)
+    assert reference.bounds["value"]["fixed_robust"] == pytest.approx((-9e307, 9e307))
+    np.testing.assert_array_equal(result.metrics.preference_score, [0., 1.])

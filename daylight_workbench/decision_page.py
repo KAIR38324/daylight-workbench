@@ -18,7 +18,7 @@ from matplotlib.figure import Figure
 from .llm_filter import PlanError, RequestError, RequestSettings
 from .preference_engine import (
     ObjectiveSpec, RankingResult, build_preference_preview, default_preference_plan,
-    make_normalization_reference, preference_request_body, rank_candidates,
+    make_normalization_reference, normalized_objective_loss, preference_request_body, rank_candidates,
     request_preference_plan, validate_preference_plan,
 )
 
@@ -735,13 +735,8 @@ class PreferenceDecisionPage(W.QWidget):
             for spec in self._objectives:
                 bounds = self._reference.bounds[spec.column][self._applied["normalization"]]
                 value = row[spec.column]
-                if bounds is None or pd.isna(value) or not np.isfinite(value):
-                    losses.append(np.nan)
-                elif bounds[1] == bounds[0]:
-                    losses.append(0.)
-                else:
-                    fraction = float(np.clip((np.longdouble(value)-bounds[0]) / (np.longdouble(bounds[1])-bounds[0]), 0, 1))
-                    losses.append(1-fraction if spec.direction == "max" else fraction)
+                numeric = np.nan if pd.isna(value) else value
+                losses.append(normalized_objective_loss([numeric], bounds, spec.direction)[0])
             ax.bar(x + (i - (count-1)/2)*width, losses, width=width, color=colors[i % 4], label=str(row.candidate_id), zorder=3)
         weights = {w["column"]: w["weight"] for w in self._applied["weights"]}
         total = sum(weights.values())

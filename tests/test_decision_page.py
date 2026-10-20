@@ -13,13 +13,17 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
+import numpy as np
 import pandas as pd
 import pytest
 from PySide6 import QtCore as C, QtWidgets as W
 
 from daylight_workbench.decision_page import PreferenceDecisionPage
 from daylight_workbench.external_results import prepare_external_results
-from daylight_workbench.preference_engine import ObjectiveSpec, default_preference_plan, request_preference_plan
+from daylight_workbench.preference_engine import (
+    ObjectiveSpec, default_preference_plan, make_normalization_reference,
+    request_preference_plan,
+)
 from daylight_workbench.ui import MainWindow
 
 
@@ -239,6 +243,28 @@ def test_nonfinite_is_missing_in_graph_not_replaced_in_original_rows(page):
     widget.confirm_mapping()
     widget.apply_reviewed_plan()
     assert 11 not in widget.ranking.frame.candidate_id.tolist()
+
+
+@pytest.mark.parametrize("direction", ["min", "max"])
+def test_comparison_bars_share_portable_extreme_normalization(page, monkeypatch, direction):
+    _, widget = page
+    monkeypatch.setattr(np, "longdouble", np.float64)
+    widget._frame = pd.DataFrame({"candidate_id": ["A", "B", "C", "D"],
+                                  "value": [-1e308, 0., 1e307, 1e308]})
+    widget._objectives = [ObjectiveSpec("value", "Value", direction)]
+    widget._applied = default_preference_plan(widget._objectives, scope="all")
+    widget._selected_ids = widget._frame.candidate_id.tolist()
+    previous = np.seterr(all="raise")
+    try:
+        widget._reference = make_normalization_reference(widget._frame, widget._objectives)
+        widget._draw_comparison()
+    finally:
+        np.seterr(**previous)
+    expected = np.array([0., .5, .55, 1.])
+    if direction == "max":
+        expected = 1 - expected
+    np.testing.assert_array_equal(
+        [bar.get_height() for bar in widget.comparison_figure.axes[0].patches], expected)
 
 
 def test_apply_current_view_does_not_redefine_its_own_top_k_scope():

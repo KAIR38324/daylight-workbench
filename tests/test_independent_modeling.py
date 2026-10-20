@@ -240,7 +240,7 @@ def test_mixed_composite_safe_roundtrip_optimizer_and_complete_provenance(mixed_
     assert loaded.metrics == model.metrics
     exported = tmp_path / 'candidates.csv'
     export_candidates(exported, restored.candidates, loaded, restored)
-    provenance = json.loads(exported.with_suffix('.csv.provenance.json').read_text())
+    provenance = json.loads(exported.with_suffix('.csv.provenance.json').read_text(encoding='utf-8'))
     assert provenance['model_family'] == 'independent_targets'
     assert provenance['target_order'] == model.data.config.targets
     assert list(provenance['target_models']) == model.data.config.targets
