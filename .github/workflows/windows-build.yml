@@ -6,13 +6,13 @@ permissions:
   contents: read
 jobs:
   build:
-    # The one-shot release retry only packages an already validated artifact.
+    # A release-only correction changes asset names, never the Windows program.
     if: >-
       github.event_name != 'push' ||
       github.repository != 'KAIR38324/daylight-workbench' ||
       github.ref != 'refs/heads/main' ||
-      github.event.before != '52a7d2e28b616bdcca13148decbf5dfb9c8268fa' ||
-      github.event.head_commit.message != 'Publish v0.3.0 prerelease retry'
+      github.event.before != '5018c8aeefe171b862b2794e924daeb965774654' ||
+      github.event.head_commit.message != 'Fix v0.3.0 release asset filenames'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -128,5 +128,81 @@ jobs:
         with:
           name: DaylightWorkbench-v0.3.0-release-assets-recovery
           path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+  repair_v030_assets:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'KAIR38324/daylight-workbench' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.before == '5018c8aeefe171b862b2794e924daeb965774654' &&
+      github.event.head_commit.message == 'Fix v0.3.0 release asset filenames'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify release and save original checksum
+        id: snapshot
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = '5018c8aeefe171b862b2794e924daeb965774654'
+          test "$(git diff --name-only HEAD^ HEAD)" = '.github/workflows/windows-build.yml'
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" |
+            jq -e --arg sha "$GITHUB_SHA" '.object.sha == $sha' >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.3.0" |
+            jq -e '.object.type == "commit" and .object.sha == "5018c8aeefe171b862b2794e924daeb965774654"' >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.3.0" |
+            jq -e '
+              .id == 418272852 and .tag_name == "v0.3.0" and
+              .target_commitish == "5018c8aeefe171b862b2794e924daeb965774654" and
+              .prerelease == true and .draft == false and
+              (.assets | length == 3 and
+                any(.[]; .id == 659004839 and .name == "DaylightWorkbench-v0.3.0-Windows-x64.zip" and .state == "uploaded" and .size == 571777093 and .digest == "sha256:3e40bafdbcc817805fb1a895e7f1a35168b08a555ea0608d0d36d1843cfd5f6e") and
+                any(.[]; .id == 659004836 and .name == "v0.3.docx" and .state == "uploaded" and .size == 7662248 and .digest == "sha256:c4f916756602676e5154148cc6f4b74118142ff4efb31fb78169ec6c70727142") and
+                any(.[]; .id == 659004838 and .name == "SHA256SUMS.txt" and .state == "uploaded" and .size == 230 and .digest == "sha256:846170900d589f23f9329c9cd9eebb5a3f7f627bd2e4e7d081f58b9fb5cfe8f2"))' >/dev/null
+          mkdir -p old-checksum
+          gh release download v0.3.0 --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir old-checksum
+          echo '846170900d589f23f9329c9cd9eebb5a3f7f627bd2e4e7d081f58b9fb5cfe8f2  old-checksum/SHA256SUMS.txt' | sha256sum -c -
+          cp old-checksum/SHA256SUMS.txt original-SHA256SUMS.txt
+      - name: Correct guide asset name and checksum
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/assets/659004836" \
+            -f name=DaylightWorkbench-v0.3.0-Guide.zh-CN.docx |
+            jq -e '.id == 659004836 and .name == "DaylightWorkbench-v0.3.0-Guide.zh-CN.docx" and .digest == "sha256:c4f916756602676e5154148cc6f4b74118142ff4efb31fb78169ec6c70727142"' >/dev/null
+          printf '%s  %s\n' \
+            '3e40bafdbcc817805fb1a895e7f1a35168b08a555ea0608d0d36d1843cfd5f6e' 'DaylightWorkbench-v0.3.0-Windows-x64.zip' \
+            'c4f916756602676e5154148cc6f4b74118142ff4efb31fb78169ec6c70727142' 'DaylightWorkbench-v0.3.0-Guide.zh-CN.docx' > SHA256SUMS.txt
+          gh release upload v0.3.0 SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.3.0" |
+            jq -e '
+              .id == 418272852 and .tag_name == "v0.3.0" and
+              .target_commitish == "5018c8aeefe171b862b2794e924daeb965774654" and
+              .prerelease == true and .draft == false and
+              (.assets | length == 3 and
+                any(.[]; .name == "DaylightWorkbench-v0.3.0-Windows-x64.zip" and .state == "uploaded" and .digest == "sha256:3e40bafdbcc817805fb1a895e7f1a35168b08a555ea0608d0d36d1843cfd5f6e") and
+                any(.[]; .name == "DaylightWorkbench-v0.3.0-Guide.zh-CN.docx" and .state == "uploaded" and .digest == "sha256:c4f916756602676e5154148cc6f4b74118142ff4efb31fb78169ec6c70727142") and
+                any(.[]; .name == "SHA256SUMS.txt" and .state == "uploaded"))' >/dev/null
+          mkdir -p verified-checksum
+          gh release download v0.3.0 --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir verified-checksum
+          cmp SHA256SUMS.txt verified-checksum/SHA256SUMS.txt
+      - name: Preserve original checksum for recovery
+        if: always() && steps.snapshot.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DaylightWorkbench-v0.3.0-original-checksum
+          path: original-SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
