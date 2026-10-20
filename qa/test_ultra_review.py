@@ -154,7 +154,7 @@ def test_goal_only_external_rows_retain_values_and_true_source(tmp_path):
     assert context.frame.pareto.tolist() == [False, False, True, True]
     path = tmp_path / "external.csv"
     export_external(path, context.frame, context)
-    provenance = json.loads(path.with_suffix(".csv.provenance.json").read_text())
+    provenance = json.loads(path.with_suffix(".csv.provenance.json").read_text(encoding="utf-8"))
     assert provenance["kind"] == "external_results"
     assert provenance["source"] == "synthetic_external.csv"
     assert provenance["inputs"] == []
