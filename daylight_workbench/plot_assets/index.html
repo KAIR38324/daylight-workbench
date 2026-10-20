@@ -13,15 +13,16 @@
 <body>
 <div class="shell">
   <header class="topbar">
-    <div class="identity"><h1>方案分析</h1><span class="subhead">多目标优化结果</span></div>
+    <div class="identity"><h1>方案分析</h1><span class="subhead">候选方案 · 稳定 ID 联动</span></div>
     <div class="metric"><strong id="total">0</strong><small>候选方案 / candidates</small></div>
-    <div class="metric selected"><strong id="selected">0</strong><small>已选 / selected</small></div>
+    <div class="metric selected"><strong id="selected">0</strong><small>已选方案 / selected</small></div>
   </header>
   <section class="controls" aria-label="Plot controls">
     <div class="segment"><button id="mode2" class="active" type="button">2D 平面</button><button id="mode3" type="button">3D 空间</button></div>
     <label>X 轴 <select id="axisX"></select></label>
     <label>Y 轴 <select id="axisY"></select></label>
     <label id="zWrap">Z 轴 <select id="axisZ"></select></label>
+    <div class="interaction-tools" id="interactionTools" aria-label="散点交互模式"><button id="toolLasso" class="active" type="button" title="拖拽自由圈选多个方案">套索</button><button id="toolBox" type="button" title="拖拽矩形选择多个方案">框选</button><button id="toolZoom" type="button" title="拖拽矩形放大，双击图面复位">缩放</button><button id="toolPan" type="button" title="拖拽平移，双击图面复位">平移</button></div>
     <button id="clear" class="clear" type="button">清除选择</button>
   </section>
   <nav class="analysis-tabs" aria-label="分析视图">
@@ -33,7 +34,7 @@
   </nav>
   <main id="frontierView" class="panels analysis-view">
     <section class="panel scatter-panel"><div class="panel-head"><div><h2>目标空间 <span>Objective space</span></h2><p id="scatterHint">拖拽框选；点击单个方案。3D 模式可旋转并点击。</p></div><div class="key" id="legend"></div></div><div id="scatter" class="chart"></div></section>
-    <section class="panel parallel-panel"><div class="panel-head"><div><h2>平行坐标 <span>Parallel coordinates</span></h2><p>拖拽维度轴范围筛选，选择会同步到左侧及结果表。</p></div></div><div id="parallel" class="chart"></div></section>
+    <section class="panel parallel-panel"><div class="panel-head"><div><h2>平行坐标 <span>Parallel coordinates</span></h2><p><span id="parallelHint">拖拽轴范围刷选；双击轴清除该维度限制。</span></p></div></div><div id="parallel" class="chart"></div></section>
   </main>
   <section id="matrixView" class="panel analysis-view detail-view" hidden><div class="panel-head"><div><h2>目标两两关系 <span>Objective pair matrix</span></h2><p id="matrixNote">每个点对应一个候选方案；点击点可选择。</p></div></div><div id="matrixChart" class="detail-chart"></div></section>
   <section id="distributionView" class="panel analysis-view detail-view" hidden><div class="panel-head"><div><h2>目标分布 <span>Objective distributions</span></h2><p>柱形表示全部候选方案；橙线标出已选方案在原始单位中的位置。点击柱形选择该区间。</p></div></div><div id="distributionChart" class="detail-chart"></div></section>

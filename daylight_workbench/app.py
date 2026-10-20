@@ -20,10 +20,12 @@ def main():
             raise SystemExit(1)
         return
     from PySide6.QtWidgets import QApplication
+    from .branding import APP_NAME, app_icon
     from .ui import MainWindow
     from .theme import apply_theme
     app = QApplication(sys.argv)
-    app.setApplicationName('Daylight Workbench')
+    app.setApplicationName(APP_NAME)
+    app.setWindowIcon(app_icon())
     apply_theme(app)
     window = MainWindow()
     window.show()

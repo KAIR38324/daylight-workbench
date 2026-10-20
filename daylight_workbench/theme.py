@@ -5,17 +5,49 @@ widget state, layout, model data, or application behavior.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
 _STYLESHEET = """
 QWidget {
-    color: #242b33;
+    color: #273544;
     background-color: #ffffff;
     font-size: 10pt;
-    selection-background-color: #dceafb;
-    selection-color: #1e2935;
+    selection-background-color: #fff0d8;
+    selection-color: #273544;
 }
+
+QWidget#workbenchRoot { background: #f5f7f9; }
+QFrame#appHeader { border: none; border-bottom: 1px solid #dfe5eb; border-radius: 0; }
+QLabel#appTitle { font-size: 17pt; font-weight: 600; color: #1e3449; }
+QLabel#appSubtitle, QLabel[role="muted"] { color: #6d7b8b; font-size: 9pt; }
+QLabel[role="sectionTitle"] { font-size: 12pt; font-weight: 600; color: #233b50; }
+QLabel[role="eyebrow"] { color: #738292; font-size: 8pt; font-weight: 600; }
+QLabel[role="notice"] { color: #687482; font-size: 9pt; padding: 2px 0; }
+QLabel[role="badge"] { color: #3e596c; background: #edf3f7; padding: 4px 9px; border-radius: 4px; font-size: 9pt; }
+QLabel[role="syntheticBadge"] { color: #865c20; background: #fff3df; padding: 4px 9px; border-radius: 4px; font-size: 9pt; }
+QFrame[role="card"] { border: 1px solid #dfe5eb; border-radius: 6px; background: #ffffff; }
+QFrame[role="softCard"] { border: 1px solid #e3e9ee; border-radius: 5px; background: #fafbfd; }
+QFrame#statusBar { border: none; border-top: 1px solid #e0e6ec; border-radius: 0; background: #f5f7f9; }
+QLabel[role="statValue"] { color: #233b50; font-size: 13pt; font-weight: 600; }
+QLabel[role="statLabel"] { color: #758291; font-size: 8pt; }
+QPushButton[role="primary"] { background: #315f87; color: #ffffff; border-color: #315f87; font-weight: 600; }
+QPushButton[role="primary"]:hover { background: #284f72; border-color: #284f72; }
+QPushButton[role="primary"]:disabled { background: #eaf0f5; color: #93a2b0; border-color: #e0e7ee; }
+QPushButton[role="quiet"] { color: #5c6c7c; background: transparent; border-color: transparent; }
+QPushButton[role="quiet"]:hover { background: #eef3f7; border-color: #d5dfe8; }
+QToolButton { color: #334c61; background: #ffffff; border: 1px solid #cbd5df; border-radius: 4px; padding: 6px 10px; }
+QToolButton:hover { background: #f4f7fa; border-color: #9eafbd; }
+QToolButton::menu-button { border-left: 1px solid #dfe5eb; width: 20px; }
+QGroupBox { border: 1px solid #e0e6ec; border-radius: 6px; margin-top: 13px; padding: 15px 12px 12px; font-weight: 600; }
+QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #3b5268; }
+QProgressBar { border: none; border-radius: 3px; background: #e7edf3; min-height: 5px; max-height: 5px; }
+QProgressBar::chunk { background: #4d7c9f; border-radius: 3px; }
+QSplitter::handle { background: #edf1f5; }
+QSplitter::handle:horizontal { width: 7px; }
+QSplitter::handle:vertical { height: 7px; }
+QGraphicsView { border: none; background: #fafbfd; }
 
 QMainWindow, QDialog, QTabWidget::pane, QScrollArea, QAbstractScrollArea {
     background: #ffffff;
@@ -29,8 +61,8 @@ QToolTip {
 }
 
 QFrame {
-    border: 1px solid #e0e5ea;
-    border-radius: 4px;
+    border: none;
+    border-radius: 0;
     background: #ffffff;
 }
 
@@ -57,7 +89,7 @@ QPushButton:pressed {
     border-color: #8098af;
 }
 QPushButton:focus {
-    border: 2px solid #5b8fbd;
+    border: 1px solid #5b8fbd;
 }
 QPushButton:default {
     color: #ffffff;
@@ -109,6 +141,13 @@ QComboBox QAbstractItemView {
     outline: 0;
     padding: 3px;
 }
+QComboBox { padding-right: 24px; }
+QComboBox::drop-down { border: none; width: 23px; }
+QComboBox::down-arrow { image: url(__ASSETS__/chevron.svg); width: 11px; height: 11px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; width: 20px; height: 17px; border: none; }
+QSpinBox::down-button, QDoubleSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; width: 20px; height: 17px; border: none; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(__ASSETS__/chevron-up.svg); width: 10px; height: 10px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(__ASSETS__/chevron.svg); width: 10px; height: 10px; }
 
 QCheckBox, QRadioButton {
     spacing: 6px;
@@ -117,9 +156,13 @@ QCheckBox, QRadioButton {
 QCheckBox:disabled, QRadioButton:disabled {
     color: #929ba5;
 }
+QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #bfccd8; border-radius: 3px; background: #ffffff; }
+QCheckBox::indicator:hover { border-color: #6b91ad; background: #f6f9fc; }
+QCheckBox::indicator:checked { background: #4a7595; border-color: #4a7595; image: url(__ASSETS__/check.svg); }
+QCheckBox::indicator:disabled { background: #f3f6f8; border-color: #dfe6ec; }
 
 QTabWidget::pane {
-    border: 1px solid #d7dde4;
+    border: 1px solid #dfe5eb;
     background: #ffffff;
     top: -1px;
 }
@@ -128,7 +171,7 @@ QTabBar::tab {
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
-    padding: 7px 12px 6px 12px;
+    padding: 9px 15px 8px 15px;
     margin-right: 2px;
 }
 QTabBar::tab:hover {
@@ -143,14 +186,17 @@ QTabBar::tab:selected {
 QTabBar::tab:disabled {
     color: #a0a8b1;
 }
+QTabWidget#workflowTabs > QTabBar::tab { padding: 12px 19px 11px; font-size: 10pt; }
+QTabWidget#workflowTabs > QTabBar::tab:selected { color: #244f73; background: #ffffff; }
+QTabWidget#trainingTabs::pane, QTabWidget#resultTabs::pane { border: none; border-top: 1px solid #dfe5eb; }
 
 QTableView, QTableWidget, QTreeView, QListView {
     color: #202832;
     background: #ffffff;
-    alternate-background-color: #f8fafc;
-    border: 1px solid #d3dae2;
-    gridline-color: #e4e8ed;
-    selection-background-color: #d9eafb;
+    alternate-background-color: #fafbfd;
+    border: 1px solid #e0e6ec;
+    gridline-color: #edf1f5;
+    selection-background-color: #fff0d8;
     selection-color: #1d2b39;
 }
 QTableView::item, QTableWidget::item, QTreeView::item, QListView::item {
@@ -159,14 +205,14 @@ QTableView::item, QTableWidget::item, QTreeView::item, QListView::item {
 }
 QTableView::item:selected, QTableWidget::item:selected,
 QTreeView::item:selected, QListView::item:selected {
-    background: #d9eafb;
+    background: #fff0d8;
     color: #1d2b39;
 }
 QHeaderView::section {
     color: #34404c;
     background: #f4f6f8;
     border: none;
-    border-right: 1px solid #e1e6eb;
+    border-right: none;
     border-bottom: 1px solid #cfd6de;
     padding: 6px 7px;
     font-weight: 600;
@@ -278,5 +324,6 @@ def apply_theme(app: QtWidgets.QApplication) -> None:
     font.setPointSizeF(10.0)
     font.setStyleHint(QtGui.QFont.StyleHint.SansSerif)
     app.setFont(font)
-    app.setStyleSheet(_STYLESHEET)
+    assets = (Path(__file__).resolve().parent / 'plot_assets').as_posix()
+    app.setStyleSheet(_STYLESHEET.replace('__ASSETS__', assets))
 
